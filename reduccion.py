@@ -45,10 +45,12 @@ def ordenar_elementos(lista):
     return datos
 
 
-def obtener_moda(lista):
-    mejor_valor = lista[0]
-    max_repeticiones = 0
+def obtener_moda(lista, valor_central=None):
+    if valor_central is None:
+        valor_central = lista[len(lista) // 2]
+
     n = len(lista)
+    max_repeticiones = 0
     for i in range(n):
         actual = lista[i]
         conteo = 0
@@ -57,8 +59,32 @@ def obtener_moda(lista):
                 conteo += 1
         if conteo > max_repeticiones:
             max_repeticiones = conteo
-            mejor_valor = actual
-    return mejor_valor
+
+    empatados = []
+    for i in range(n):
+        actual = lista[i]
+        conteo = 0
+        for j in range(n):
+            if lista[j] == actual:
+                conteo += 1
+        if conteo == max_repeticiones and actual not in empatados:
+            empatados.append(actual)
+
+    if len(empatados) == 1:
+        return empatados[0]
+
+    if valor_central in empatados:
+        return valor_central
+
+    mejor_val = empatados[0]
+    menor_dist = abs(mejor_val - valor_central)
+    for val in empatados:
+        dist = abs(val - valor_central)
+        if dist < menor_dist:
+            menor_dist = dist
+            mejor_val = val
+
+    return mejor_val
 
 
 def procesar_canal(matriz, filas, columnas, mascara, tam_f, tam_c, tipo_filtro, salto_f, salto_c, usar_pad):
@@ -114,7 +140,8 @@ def procesar_canal(matriz, filas, columnas, mascara, tam_f, tam_c, tipo_filtro, 
                 for i in range(tam_f):
                     for j in range(tam_c):
                         vecinos.append(matriz_trabajo[f + i][c + j])
-                matriz_salida[f_out][c_out] = obtener_moda(vecinos)
+                pixel_central = matriz_trabajo[f + borde_f][c + borde_c]
+                matriz_salida[f_out][c_out] = obtener_moda(vecinos, pixel_central)
 
             c_out += 1
         f_out += 1
