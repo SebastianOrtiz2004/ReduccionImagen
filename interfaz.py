@@ -13,6 +13,7 @@ from reduccion import (
     MASCARA_GAUSSIANA_3X3,
 )
 
+# Variables globales para almacenar matrices originales en uint8
 ancho_orig = 0
 alto_orig = 0
 canal_rojo = []
@@ -23,11 +24,26 @@ vista_orig_tk = None
 vista_res_tk = None
 entradas_matriz = []
 
+# Variables globales para rastrear la máscara aplicada y sus pesos
 nombre_mascara_activa = "Gaussiana Ejemplo"
 mascara_aplicada_guardada = []
 nombre_filtro_aplicado_guardado = ""
 suma_pesos_guardada = 1.0
 
+# Variables globales para el zoom interactivo de la imagen reducida
+img_resultado_pil_nativa = None
+zoom_factor = 1.0
+pan_x = 0.0
+pan_y = 0.0
+drag_start_x = 0
+drag_start_y = 0
+drag_start_pan_x = 0.0
+drag_start_pan_y = 0.0
+canvas_resultado = None
+img_canvas_id = None
+lbl_zoom_val = None
+
+# Referencias a widgets dinámicos de interfaz
 lbl_tipo_mascara_activa = None
 lbl_info_resultado_mascara = None
 btn_ver_mascara = None
@@ -44,10 +60,14 @@ var_padding = None
 frame_cuadricula = None
 ventana = None
 
+# Dimensiones máximas asignadas para la vista previa simétrica
 MAX_ANCHO_PREVIEW = 440
 MAX_ALTO_PREVIEW = 460
 
 
+# ------------------------------------------------------------------------------
+# VISUALIZACIÓN SIMÉTRICA (SIN MODIFICAR LOS DATOS DE MEMORIA)
+# ------------------------------------------------------------------------------
 def generar_foto_preview(matriz_r, matriz_g, matriz_b, filas, columnas):
     buffer_rgb = bytearray(filas * columnas * 3)
     pos = 0
@@ -70,6 +90,125 @@ def generar_foto_preview(matriz_r, matriz_g, matriz_b, filas, columnas):
     return ImageTk.PhotoImage(img_vista)
 
 
+# ------------------------------------------------------------------------------
+# ZOOM INTERACTIVO Y NAVEGACIÓN EN LA IMAGEN RESULTANTE
+# ------------------------------------------------------------------------------
+def actualizar_render_zoom():
+    global vista_res_tk, img_canvas_id
+    if img_resultado_pil_nativa is None or canvas_resultado is None:
+        return
+
+    n_cols, n_filas = img_resultado_pil_nativa.size
+
+    # Escala base simétrica respecto a la imagen original cargada
+    # para que la reducción física (tamaño en pantalla) sea real y evidente
+    if ancho_orig > 0 and alto_orig > 0:
+        escala_base = min(MAX_ANCHO_PREVIEW / ancho_orig, MAX_ALTO_PREVIEW / alto_orig, 1.0)
+    else:
+        escala_base = 1.0
+
+    # Tamaño base en pantalla (exactamente al tamaño al que se redujo la imagen)
+    base_w = max(1, int(n_cols * escala_base))
+    base_h = max(1, int(n_filas * escala_base))
+
+    # Tamaño aplicando el factor de zoom interactivo a partir del tamaño reducido
+    target_w = max(1, int(base_w * zoom_factor))
+    target_h = max(1, int(base_h * zoom_factor))
+
+    # Prevenir desborde de memoria limitando dimensiones a 4000px
+    target_w = min(target_w, 4000)
+    target_h = min(target_h, 4000)
+
+    # Reescalado de alta calidad con Lanczos
+    img_render = img_resultado_pil_nativa.resize((target_w, target_h), Image.Resampling.LANCZOS)
+    vista_res_tk = ImageTk.PhotoImage(img_render)
+
+    canvas_resultado.delete("all")
+    cx = (MAX_ANCHO_PREVIEW // 2) + pan_x
+    cy = (MAX_ALTO_PREVIEW // 2) + pan_y
+    img_canvas_id = canvas_resultado.create_image(cx, cy, anchor="center", image=vista_res_tk)
+    canvas_resultado.config(cursor="fleur")
+
+    # Actualizar texto del indicador de zoom
+    if lbl_zoom_val is not None and lbl_zoom_val.winfo_exists():
+        lbl_zoom_val.config(text=f"Zoom: {zoom_factor:.2f}×")
+
+    # Actualizar dimensiones en el panel
+    if lbl_info_resultado_dim is not None and lbl_info_resultado_dim.winfo_exists():
+        if abs(zoom_factor - 1.0) < 0.01:
+            lbl_info_resultado_dim.config(text=f"{n_filas} x {n_cols} px  (1.0× Tamaño Reducido)")
+        else:
+            lbl_info_resultado_dim.config(text=f"{n_filas} x {n_cols} px  |  🔍 Zoom {zoom_factor:.2f}×")
+
+
+def aplicar_delta_zoom(delta_factor, center_x=None, center_y=None):
+    global zoom_factor, pan_x, pan_y
+    if img_resultado_pil_nativa is None:
+        return
+
+    nuevo_zoom = zoom_factor * delta_factor
+    nuevo_zoom = max(0.25, min(15.0, nuevo_zoom))
+    if abs(nuevo_zoom - zoom_factor) < 1e-4:
+        return
+
+    if center_x is None:
+        center_x = MAX_ANCHO_PREVIEW / 2.0
+    if center_y is None:
+        center_y = MAX_ALTO_PREVIEW / 2.0
+
+    cx_ant = (MAX_ANCHO_PREVIEW / 2.0) + pan_x
+    cy_ant = (MAX_ALTO_PREVIEW / 2.0) + pan_y
+
+    ratio = nuevo_zoom / zoom_factor
+    cx_nuevo = center_x - (center_x - cx_ant) * ratio
+    cy_nuevo = center_y - (center_y - cy_ant) * ratio
+
+    pan_x = cx_nuevo - (MAX_ANCHO_PREVIEW / 2.0)
+    pan_y = cy_nuevo - (MAX_ALTO_PREVIEW / 2.0)
+    zoom_factor = nuevo_zoom
+
+    actualizar_render_zoom()
+
+
+def on_scroll_zoom(event):
+    if img_resultado_pil_nativa is None:
+        return
+    factor = 1.25 if event.delta > 0 else (1.0 / 1.25)
+    aplicar_delta_zoom(factor, event.x, event.y)
+
+
+def on_drag_inicio(event):
+    global drag_start_x, drag_start_y, drag_start_pan_x, drag_start_pan_y
+    drag_start_x = event.x
+    drag_start_y = event.y
+    drag_start_pan_x = pan_x
+    drag_start_pan_y = pan_y
+
+
+def on_drag_mover(event):
+    global pan_x, pan_y
+    if img_resultado_pil_nativa is None or img_canvas_id is None:
+        return
+    pan_x = drag_start_pan_x + (event.x - drag_start_x)
+    pan_y = drag_start_pan_y + (event.y - drag_start_y)
+    cx = (MAX_ANCHO_PREVIEW // 2) + pan_x
+    cy = (MAX_ALTO_PREVIEW // 2) + pan_y
+    canvas_resultado.coords(img_canvas_id, cx, cy)
+
+
+def resetear_zoom(event=None):
+    global zoom_factor, pan_x, pan_y
+    if img_resultado_pil_nativa is None:
+        return
+    zoom_factor = 1.0
+    pan_x = 0.0
+    pan_y = 0.0
+    actualizar_render_zoom()
+
+
+# ------------------------------------------------------------------------------
+# GESTIÓN Y CÁLCULO DE LA CUADRÍCULA DE LA MÁSCARA
+# ------------------------------------------------------------------------------
 def actualizar_indicador_mascara(nombre=None):
     global nombre_mascara_activa
     if nombre:
@@ -113,6 +252,7 @@ def calcular_gaussiana_en_cuadricula():
     tam = len(entradas_matriz)
     pesos_normalizados = calcular_matriz_gaussiana(tam)
 
+    # Escribimos los pesos en las casillas editables
     for i in range(tam):
         for j in range(tam):
             entradas_matriz[i][j].delete(0, tk.END)
@@ -154,6 +294,9 @@ def on_cambio_filtro(*args):
         actualizar_indicador_mascara()
 
 
+# ------------------------------------------------------------------------------
+# EVENTOS DE CARGA Y EJECUCIÓN
+# ------------------------------------------------------------------------------
 def abrir_imagen():
     global ancho_orig, alto_orig, canal_rojo, canal_verde, canal_azul, vista_orig_tk
 
@@ -170,6 +313,7 @@ def abrir_imagen():
 
     filas_r, filas_g, filas_b = [], [], []
 
+    # Carga completa al 100% de píxeles reales en memoria RAM
     for f in range(alto_orig):
         fr, fg, fb = bytearray(ancho_orig), bytearray(ancho_orig), bytearray(ancho_orig)
         for c in range(ancho_orig):
@@ -186,6 +330,27 @@ def abrir_imagen():
     vista_orig_tk = generar_foto_preview(canal_rojo, canal_verde, canal_azul, alto_orig, ancho_orig)
     lbl_img_original.config(image=vista_orig_tk, text="")
     lbl_info_original_dim.config(text=f"{alto_orig} x {ancho_orig} px")
+
+    # Limpiar resultado anterior y reiniciar estado de zoom
+    global img_resultado_pil_nativa, zoom_factor, pan_x, pan_y
+    img_resultado_pil_nativa = None
+    zoom_factor = 1.0
+    pan_x = 0.0
+    pan_y = 0.0
+    if canvas_resultado is not None and canvas_resultado.winfo_exists():
+        canvas_resultado.delete("all")
+        canvas_resultado.config(cursor="arrow")
+        canvas_resultado.create_text(
+            MAX_ANCHO_PREVIEW // 2, MAX_ALTO_PREVIEW // 2,
+            text="Sin resultado\n\nAjusta los parámetros y presiona 'Procesar y Reducir'",
+            fill="#555555", font=("Arial", 10), justify="center", tags="placeholder"
+        )
+    if lbl_info_resultado_dim is not None and lbl_info_resultado_dim.winfo_exists():
+        lbl_info_resultado_dim.config(text="Sin procesar")
+    if lbl_zoom_val is not None and lbl_zoom_val.winfo_exists():
+        lbl_zoom_val.config(text="Zoom: 1.00×")
+    if btn_ver_mascara is not None and btn_ver_mascara.winfo_exists():
+        btn_ver_mascara.config(state=tk.DISABLED)
 
 
 def mostrar_matriz_aplicada():
@@ -243,6 +408,7 @@ def mostrar_matriz_aplicada():
 
 def ejecutar_proceso():
     global vista_res_tk, mascara_aplicada_guardada, nombre_filtro_aplicado_guardado, suma_pesos_guardada
+    global img_resultado_pil_nativa, zoom_factor, pan_x, pan_y
 
     if alto_orig == 0 or ancho_orig == 0:
         messagebox.showinfo("Aviso", "Primero carga una imagen.")
@@ -256,6 +422,7 @@ def ejecutar_proceso():
     tipo = combo_filtro.get()
     mascara = []
 
+    # Solo leemos los números de la matriz si es convolución lineal
     if tipo == "Máscara (Convolución)":
         try:
             for i in range(tam):
@@ -267,6 +434,7 @@ def ejecutar_proceso():
             messagebox.showerror("Error", "Verifica que todos los valores de la máscara sean números válidos.")
             return
 
+        # Identificar la máscara con precisión
         es_gauss_enteros = (tam == 3 and
                             mascara[0] == [1.0, 2.0, 1.0] and
                             mascara[1] == [2.0, 8.0, 2.0] and
@@ -303,31 +471,51 @@ def ejecutar_proceso():
     usar_pad = var_padding.get()
     borde = (tam - 1) // 2
 
+    # Procesamiento matemático a resolución nativa
     r_res, n_filas, n_cols = procesar_canal(canal_rojo, alto_orig, ancho_orig, mascara, tam, tam, tipo, salto_f, salto_c, usar_pad)
     g_res, _, _ = procesar_canal(canal_verde, alto_orig, ancho_orig, mascara, tam, tam, tipo, salto_f, salto_c, usar_pad)
     b_res, _, _ = procesar_canal(canal_azul, alto_orig, ancho_orig, mascara, tam, tam, tipo, salto_f, salto_c, usar_pad)
 
-    vista_res_tk = generar_foto_preview(r_res, g_res, b_res, n_filas, n_cols)
-    lbl_img_resultado.config(image=vista_res_tk, text="")
+    # Construimos la imagen PIL nativa (100% de píxeles reducidos reales)
+    buffer_res = bytearray(n_filas * n_cols * 3)
+    pos = 0
+    for f in range(n_filas):
+        rf, gf, bf = r_res[f], g_res[f], b_res[f]
+        for c in range(n_cols):
+            buffer_res[pos] = rf[c]
+            buffer_res[pos + 1] = gf[c]
+            buffer_res[pos + 2] = bf[c]
+            pos += 3
+    img_resultado_pil_nativa = Image.frombytes("RGB", (n_cols, n_filas), bytes(buffer_res))
+
+    # Reiniciar zoom al 1.0x (tamaño exacto reducido) y centrado
+    zoom_factor = 1.0
+    pan_x = 0.0
+    pan_y = 0.0
+    actualizar_render_zoom()
 
     pad_info = f"Sí (+{borde} px)" if usar_pad else "No"
-    lbl_info_resultado_dim.config(text=f"{n_filas} x {n_cols} px")
     lbl_info_resultado_mascara.config(text=f"Máscara: {nombre_filtro_aplicado_guardado}")
-    lbl_info_resultado_detalles.config(text=f"Salto: {salto_f}x{salto_c} | Pad: {pad_info} | Ventana: {tam}x{tam}")
+    lbl_info_resultado_detalles.config(text=f"Salto: {salto_f}x{salto_c} | Pad: {pad_info} | Ventana: {tam}x{tam} | Rueda=Zoom Drag=Mover")
     btn_ver_mascara.config(state=tk.NORMAL)
 
 
+# ------------------------------------------------------------------------------
+# CONSTRUCCIÓN DE LA INTERFAZ GRÁFICA
+# ------------------------------------------------------------------------------
 def crear_interfaz():
     global ventana, lbl_tipo_mascara_activa, frame_cuadricula
     global entrada_tamano, combo_filtro, entrada_salto_f, entrada_salto_c, var_padding
     global lbl_img_original, lbl_info_original_dim
     global lbl_img_resultado, lbl_info_resultado_dim, lbl_info_resultado_mascara, lbl_info_resultado_detalles, btn_ver_mascara
+    global canvas_resultado, lbl_zoom_val
 
     ventana = tk.Tk()
     ventana.title("PDI - Convolución Espacial y Reducción por Salto")
-    ventana.geometry("1260x700")
+    ventana.geometry("1280x730")
     ventana.configure(bg="#181818")
 
+    # Panel lateral izquierdo
     panel_izq = tk.Frame(ventana, bg="#242424", padx=14, pady=12, width=320)
     panel_izq.pack(side=tk.LEFT, fill=tk.Y)
 
@@ -336,6 +524,7 @@ def crear_interfaz():
         bg="#0078d4", fg="white", font=("Arial", 10, "bold"), width=25, relief=tk.FLAT
     ).pack(pady=4)
 
+    # 1. Tamaño de la máscara
     tk.Label(panel_izq, text="2. Tamaño de la Máscara:", bg="#242424", fg="white", font=("Arial", 9, "bold")).pack(anchor="w", pady=(10, 2))
     frame_dim = tk.Frame(panel_izq, bg="#242424")
     frame_dim.pack(anchor="w")
@@ -346,6 +535,7 @@ def crear_interfaz():
     tk.Label(frame_dim, text="x N (ej. 3, 5)", bg="#242424", fg="gray", font=("Arial", 8)).pack(side=tk.LEFT, padx=(0, 8))
     tk.Button(frame_dim, text="Crear Cuadrícula", command=crear_cuadricula_vacia, bg="#3e3e42", fg="white", font=("Arial", 8, "bold"), relief=tk.FLAT).pack(side=tk.LEFT)
 
+    # 2. Selector de Filtro
     tk.Label(panel_izq, text="3. Técnica de Filtro:", bg="#242424", fg="white", font=("Arial", 9, "bold")).pack(anchor="w", pady=(10, 2))
     combo_filtro = tk.StringVar(value="Máscara (Convolución)")
     combo_filtro.trace_add("write", on_cambio_filtro)
@@ -354,6 +544,7 @@ def crear_interfaz():
     menu_filtro.config(bg="#333333", fg="white", font=("Arial", 9), highlightthickness=0, width=22)
     menu_filtro.pack(anchor="w")
 
+    # 3. Cuadrícula de la máscara y botones de cálculo
     tk.Label(panel_izq, text="4. Máscara W(x,y) (Manual o Calculada):", bg="#242424", fg="#4ec9b0", font=("Arial", 9, "bold")).pack(anchor="w", pady=(10, 2))
     lbl_tipo_mascara_activa = tk.Label(panel_izq, text="Máscara Activa: Gaussiana Ejemplo", bg="#242424", fg="#ffd700", font=("Arial", 8, "italic"))
     lbl_tipo_mascara_activa.pack(anchor="w", pady=(0, 4))
@@ -367,6 +558,7 @@ def crear_interfaz():
     tk.Button(frame_presets, text="Gaussiana Ejemplo", command=cargar_preset_gaussiana_clase, bg="#333333", fg="white", font=("Arial", 8), relief=tk.FLAT).pack(side=tk.LEFT, padx=2)
     tk.Button(frame_presets, text="Media", command=cargar_preset_media, bg="#333333", fg="white", font=("Arial", 8), relief=tk.FLAT).pack(side=tk.LEFT, padx=2)
 
+    # 4. Saltos de reducción
     tk.Label(panel_izq, text="5. Salto de Reducción:", bg="#242424", fg="white", font=("Arial", 9, "bold")).pack(anchor="w", pady=(10, 2))
     frame_saltos = tk.Frame(panel_izq, bg="#242424")
     frame_saltos.pack(anchor="w")
@@ -380,6 +572,7 @@ def crear_interfaz():
     entrada_salto_c.insert(0, "2")
     entrada_salto_c.grid(row=1, column=1, padx=4, pady=2)
 
+    # 5. Padding
     var_padding = tk.BooleanVar(value=True)
     chk_pad = tk.Checkbutton(
         panel_izq, text="6. Aplicar Padding de ceros", variable=var_padding,
@@ -392,12 +585,14 @@ def crear_interfaz():
         bg="#107c41", fg="white", font=("Arial", 10, "bold"), width=25, relief=tk.FLAT
     ).pack(pady=14)
 
+    # Panel derecho comparativo simétrico (50% y 50%)
     panel_der = tk.Frame(ventana, bg="#181818", padx=12, pady=12)
     panel_der.pack(side=tk.RIGHT, fill=tk.BOTH, expand=True)
     panel_der.columnconfigure(0, weight=1)
     panel_der.columnconfigure(1, weight=1)
     panel_der.rowconfigure(0, weight=1)
 
+    # Tarjeta Izquierda: Imagen Original
     col_izq = tk.Frame(panel_der, bg="#202020", padx=10, pady=10)
     col_izq.grid(row=0, column=0, sticky="nsew", padx=6, pady=4)
 
@@ -406,15 +601,10 @@ def crear_interfaz():
     lbl_info_original_dim.pack(pady=(0, 2))
 
     tk.Label(col_izq, text="Resolución nativa", bg="#202020", fg="#666666", font=("Arial", 8, "italic")).pack(pady=(0, 2))
-    lbl_espacio_simetria = tk.Label(col_izq, text="", bg="#202020", font=("Arial", 8))
+    lbl_espacio_simetria = tk.Label(col_izq, text="Vista previa de referencia original", bg="#202020", fg="#555555", font=("Arial", 8))
     lbl_espacio_simetria.pack(pady=(0, 2))
 
-    frame_display_orig = tk.Frame(col_izq, bg="#0d0d0d", width=MAX_ANCHO_PREVIEW, height=MAX_ALTO_PREVIEW)
-    frame_display_orig.pack(expand=True)
-    frame_display_orig.pack_propagate(False)
-    lbl_img_original = tk.Label(frame_display_orig, bg="#0d0d0d", text="Sin imagen cargada", fg="#555555")
-    lbl_img_original.pack(expand=True)
-
+    # Tarjeta Derecha: Imagen Reducida
     col_der = tk.Frame(panel_der, bg="#202020", padx=10, pady=10)
     col_der.grid(row=0, column=1, sticky="nsew", padx=6, pady=4)
 
@@ -422,24 +612,75 @@ def crear_interfaz():
     lbl_info_resultado_dim = tk.Label(col_der, text="Sin procesar", bg="#202020", fg="#4ec9b0", font=("Arial", 9, "bold"))
     lbl_info_resultado_dim.pack()
 
+    # Indicador exacto de la máscara utilizada
     lbl_info_resultado_mascara = tk.Label(col_der, text="Máscara: Ninguna procesada", bg="#202020", fg="#ffd700", font=("Arial", 9, "bold"))
     lbl_info_resultado_mascara.pack(pady=(1, 1))
 
     lbl_info_resultado_detalles = tk.Label(col_der, text="Ajusta los parámetros y presiona Procesar", bg="#202020", fg="#888888", font=("Arial", 8))
     lbl_info_resultado_detalles.pack(pady=(0, 2))
 
+    # Botón interactivo para consultar la matriz aplicada
     btn_ver_mascara = tk.Button(
         col_der, text="Ver Matriz W(x,y) Aplicada", command=mostrar_matriz_aplicada,
         bg="#2d2d30", fg="#4ec9b0", font=("Arial", 8, "bold"), relief=tk.FLAT, cursor="hand2", state=tk.DISABLED
     )
-    btn_ver_mascara.pack(pady=(0, 4))
+    btn_ver_mascara.pack(pady=(0, 2))
+
+    # Barra interactiva de control de Zoom (Aumentar / Disminuir / Reset)
+    frame_zoom_bar = tk.Frame(col_der, bg="#202020")
+    frame_zoom_bar.pack(pady=(2, 4))
+
+    tk.Button(
+        frame_zoom_bar, text="🔍➖ Alejar", command=lambda: aplicar_delta_zoom(1.0 / 1.25),
+        bg="#2d2d30", fg="white", font=("Arial", 8, "bold"), relief=tk.FLAT, padx=6, cursor="hand2"
+    ).pack(side=tk.LEFT, padx=2)
+
+    lbl_zoom_val = tk.Label(frame_zoom_bar, text="Zoom: 1.00×", bg="#202020", fg="#4ec9b0", font=("Arial", 9, "bold"), width=12)
+    lbl_zoom_val.pack(side=tk.LEFT, padx=2)
+
+    tk.Button(
+        frame_zoom_bar, text="🔍➕ Acercar", command=lambda: aplicar_delta_zoom(1.25),
+        bg="#2d2d30", fg="white", font=("Arial", 8, "bold"), relief=tk.FLAT, padx=6, cursor="hand2"
+    ).pack(side=tk.LEFT, padx=2)
+
+    tk.Button(
+        frame_zoom_bar, text="↺ 1.0× Reset", command=resetear_zoom,
+        bg="#2d2d30", fg="#ffd700", font=("Arial", 8, "bold"), relief=tk.FLAT, padx=6, cursor="hand2"
+    ).pack(side=tk.LEFT, padx=2)
+
+    # Marco simulado en columna izquierda para alinear exactamente las dos cajas de imagen
+    tk.Frame(col_izq, bg="#202020", height=28).pack(pady=(0, 4))
+
+    frame_display_orig = tk.Frame(col_izq, bg="#0d0d0d", width=MAX_ANCHO_PREVIEW, height=MAX_ALTO_PREVIEW)
+    frame_display_orig.pack(expand=True)
+    frame_display_orig.pack_propagate(False)
+    lbl_img_original = tk.Label(frame_display_orig, bg="#0d0d0d", text="Sin imagen cargada", fg="#555555")
+    lbl_img_original.pack(expand=True)
 
     frame_display_res = tk.Frame(col_der, bg="#0d0d0d", width=MAX_ANCHO_PREVIEW, height=MAX_ALTO_PREVIEW)
     frame_display_res.pack(expand=True)
     frame_display_res.pack_propagate(False)
-    lbl_img_resultado = tk.Label(frame_display_res, bg="#0d0d0d", text="Sin resultado", fg="#555555")
-    lbl_img_resultado.pack(expand=True)
 
+    canvas_resultado = tk.Canvas(frame_display_res, bg="#0d0d0d", width=MAX_ANCHO_PREVIEW, height=MAX_ALTO_PREVIEW, highlightthickness=0)
+    canvas_resultado.pack(expand=True)
+    canvas_resultado.create_text(
+        MAX_ANCHO_PREVIEW // 2, MAX_ALTO_PREVIEW // 2,
+        text="Sin resultado\n\nAjusta los parámetros y presiona 'Procesar y Reducir'",
+        fill="#555555", font=("Arial", 10), justify="center", tags="placeholder"
+    )
+
+    # Eventos de zoom interactivo en canvas: Rueda = Zoom, Arrastre = Mover, Doble clic = 1.0x
+    canvas_resultado.bind("<MouseWheel>", on_scroll_zoom)
+    canvas_resultado.bind("<Button-4>", lambda e: aplicar_delta_zoom(1.25, e.x, e.y))
+    canvas_resultado.bind("<Button-5>", lambda e: aplicar_delta_zoom(1.0 / 1.25, e.x, e.y))
+    canvas_resultado.bind("<ButtonPress-1>", on_drag_inicio)
+    canvas_resultado.bind("<B1-Motion>", on_drag_mover)
+    canvas_resultado.bind("<Double-Button-1>", resetear_zoom)
+
+    # Alias para compatibilidad con código existente
+    lbl_img_resultado = canvas_resultado
+
+    # Por defecto cargamos la Gaussiana de clase (3x3)
     cargar_preset_gaussiana_clase()
 
     return ventana
