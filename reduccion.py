@@ -1,8 +1,5 @@
 import math
 
-# ------------------------------------------------------------------------------
-# CONSTANTES Y PRESETS
-# ------------------------------------------------------------------------------
 MASCARA_GAUSSIANA_3X3 = [
     [1, 2, 1],
     [2, 8, 2],
@@ -10,9 +7,6 @@ MASCARA_GAUSSIANA_3X3 = [
 ]
 
 
-# ------------------------------------------------------------------------------
-# 1. UTILIDADES uint8 (0 A 255) Y MATRICES
-# ------------------------------------------------------------------------------
 def formato_uint8(valor):
     numero = int(valor + 0.5)
     if numero < 0:
@@ -29,15 +23,11 @@ def crear_matriz(filas, columnas):
     return matriz
 
 
-# ------------------------------------------------------------------------------
-# 2. PADDING CON CEROS
-# ------------------------------------------------------------------------------
 def agregar_padding(matriz, filas, columnas, borde_f, borde_c):
     nuevas_filas = filas + (2 * borde_f)
     nuevas_columnas = columnas + (2 * borde_c)
     matriz_pad = crear_matriz(nuevas_filas, nuevas_columnas)
 
-    # Copiamos la imagen original en el centro
     for f in range(filas):
         for c in range(columnas):
             matriz_pad[f + borde_f][c + borde_c] = matriz[f][c]
@@ -45,9 +35,6 @@ def agregar_padding(matriz, filas, columnas, borde_f, borde_c):
     return matriz_pad
 
 
-# ------------------------------------------------------------------------------
-# 3. ALGORITMOS DE ORDENAMIENTO Y ESTADÍSTICA PARA MEDIANA Y MODA
-# ------------------------------------------------------------------------------
 def ordenar_elementos(lista):
     datos = list(lista)
     n = len(datos)
@@ -74,9 +61,6 @@ def obtener_moda(lista):
     return mejor_valor
 
 
-# ------------------------------------------------------------------------------
-# 4. CONVOLUCIÓN Y REDUCCIÓN POR SALTO (STRIDE)
-# ------------------------------------------------------------------------------
 def procesar_canal(matriz, filas, columnas, mascara, tam_f, tam_c, tipo_filtro, salto_f, salto_c, usar_pad):
     borde_f = (tam_f - 1) // 2
     borde_c = (tam_c - 1) // 2
@@ -94,7 +78,6 @@ def procesar_canal(matriz, filas, columnas, mascara, tam_f, tam_c, tipo_filtro, 
     cols_salida = len(range(0, limite_cols, salto_c))
     matriz_salida = crear_matriz(filas_salida, cols_salida)
 
-    # Normalización para filtros de máscara (convolución lineal)
     suma_pesos = 0.0
     if tipo_filtro == "Máscara (Convolución)":
         for i in range(tam_f):
@@ -103,7 +86,6 @@ def procesar_canal(matriz, filas, columnas, mascara, tam_f, tam_c, tipo_filtro, 
         if suma_pesos == 0:
             suma_pesos = 1.0
 
-    # Recorrido con los saltos pedidos
     f_out = 0
     for f in range(0, limite_filas, salto_f):
         c_out = 0
@@ -140,14 +122,10 @@ def procesar_canal(matriz, filas, columnas, mascara, tam_f, tam_c, tipo_filtro, 
     return matriz_salida, filas_salida, cols_salida
 
 
-# ------------------------------------------------------------------------------
-# 5. CÁLCULO MATEMÁTICO DE FILTROS ESPACIALES
-# ------------------------------------------------------------------------------
 def calcular_matriz_gaussiana(tam):
     sigma = tam / 4.0
     centro = (tam - 1) // 2
 
-    # Evaluamos la ecuación gaussiana celda a celda
     pesos = []
     suma_total = 0.0
     for i in range(tam):
@@ -161,7 +139,6 @@ def calcular_matriz_gaussiana(tam):
             suma_total += val
         pesos.append(fila)
 
-    # Normalizamos la matriz
     matriz_norm = []
     for i in range(tam):
         fila = []
