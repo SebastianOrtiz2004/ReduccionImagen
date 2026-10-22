@@ -1,5 +1,7 @@
+import math
+import numpy as np
 import tkinter as tk
-from tkinter import filedialog, messagebox
+from tkinter import filedialog, messagebox, simpledialog, ttk
 from PIL import Image, ImageTk
 
 from reduccion import (
@@ -11,6 +13,15 @@ from reduccion import (
     procesar_canal,
     calcular_matriz_gaussiana,
     MASCARA_GAUSSIANA_3X3,
+    aplicar_ruido_sal_pimienta,
+    imnoise,
+    calcular_fft2_imagen,
+    generar_espectro_visual,
+    generar_mascara_filtro,
+    filtrar_frecuencia_rgb,
+    MASCARA_QUEMADA_3X3,
+    binarizar_canales,
+    aplicar_mascara_quemada,
 )
 
 ancho_orig = 0
@@ -18,6 +29,68 @@ alto_orig = 0
 canal_rojo = []
 canal_verde = []
 canal_azul = []
+canal_rojo_puro = []
+canal_verde_puro = []
+canal_azul_puro = []
+densidad_ruido_actual = 0.0
+entrada_ruido = None
+entrada_ruido_frec = None
+
+# Variables para Pestaña 2: Máscara Quemada [-1, 8] Antidesenfoque / Aclarar
+var_frec_quemada = None
+scale_frec_aclarado = None
+entry_frec_aclarado = None
+scale_frec_umbral = None
+entry_frec_umbral = None
+combo_frec_modo = None
+lbl_tit_frec_filtrada = None
+modo_vista_c4 = "filtrada"
+
+# Variables para Pestaña 2: Filtrado en Frecuencia (FFT 2D)
+F_r_actual = None
+F_g_actual = None
+F_b_actual = None
+F_gray_actual = None
+H_actual = None
+
+r_frec_filtrado = None
+g_frec_filtrado = None
+b_frec_filtrado = None
+
+foto_frec_orig_tk = None
+foto_frec_ruido_tk = None
+foto_frec_fft_tk = None
+foto_frec_filtrada_tk = None
+
+frec_fft_w_disp = 0
+frec_fft_h_disp = 0
+
+lbl_frec_info_dim = None
+combo_tipo_pasa = None
+combo_modelo_filtro = None
+scale_d0 = None
+entry_d0 = None
+entry_orden = None
+combo_modo_espectro = None
+
+lbl_info_frec_orig = None
+lbl_disp_frec_orig = None
+lbl_info_frec_ruido = None
+lbl_disp_frec_ruido = None
+lbl_info_frec_fft = None
+canvas_disp_frec_fft = None
+lbl_info_frec_filtrada = None
+lbl_disp_frec_filtrada = None
+
+lbl_insp_uv = None
+lbl_insp_radio = None
+lbl_insp_real = None
+lbl_insp_imag = None
+lbl_insp_mag = None
+lbl_insp_fase = None
+
+MAX_W_QUAD = 440
+MAX_H_QUAD = 250
 
 vista_orig_tk = None
 vista_res_tk = None
@@ -80,6 +153,37 @@ def generar_foto_preview(matriz_r, matriz_g, matriz_b, filas, columnas):
     img_vista = img_nativa.copy()
     img_vista.thumbnail((ancho_disp, alto_disp), Image.Resampling.LANCZOS)
     return ImageTk.PhotoImage(img_vista)
+
+
+def generar_foto_preview_rgb(matriz_r, matriz_g, matriz_b, filas, columnas, max_w=440, max_h=250):
+    buffer_rgb = bytearray(filas * columnas * 3)
+    pos = 0
+    for f in range(filas):
+        rf, gf, bf = matriz_r[f], matriz_g[f], matriz_b[f]
+        for c in range(columnas):
+            buffer_rgb[pos] = rf[c]
+            buffer_rgb[pos + 1] = gf[c]
+            buffer_rgb[pos + 2] = bf[c]
+            pos += 3
+
+    img_nativa = Image.frombytes("RGB", (columnas, filas), bytes(buffer_rgb))
+    escala = min(max_w / max(1, columnas), max_h / max(1, filas), 1.0)
+    w_disp = max(1, int(columnas * escala))
+    h_disp = max(1, int(filas * escala))
+
+    img_vista = img_nativa.resize((w_disp, h_disp), Image.Resampling.LANCZOS)
+    return ImageTk.PhotoImage(img_vista), w_disp, h_disp
+
+
+def generar_foto_preview_array(arr_2d, max_w=440, max_h=250):
+    img_pil = Image.fromarray(arr_2d, mode="L").convert("RGB")
+    w, h = img_pil.size
+    escala = min(max_w / max(1, w), max_h / max(1, h), 1.0)
+    w_disp = max(1, int(w * escala))
+    h_disp = max(1, int(h * escala))
+
+    img_vista = img_pil.resize((w_disp, h_disp), Image.Resampling.LANCZOS)
+    return ImageTk.PhotoImage(img_vista), w_disp, h_disp
 
 
 def actualizar_render_zoom():
@@ -261,6 +365,52 @@ def cargar_preset_media():
     actualizar_indicador_mascara("Media")
 
 
+def on_scale_frec_aclarado_change(val):
+    try:
+        fval = float(val)
+        if entry_frec_aclarado is not None and entry_frec_aclarado.winfo_exists():
+            entry_frec_aclarado.delete(0, tk.END)
+            entry_frec_aclarado.insert(0, f"{fval:.2f}")
+        if var_frec_quemada is not None and var_frec_quemada.get():
+            actualizar_vista_cuadrante_4()
+    except Exception:
+        pass
+
+
+def on_entry_frec_aclarado_change(event=None):
+    try:
+        val = float(entry_frec_aclarado.get())
+        if scale_frec_aclarado is not None and scale_frec_aclarado.winfo_exists():
+            scale_frec_aclarado.set(val)
+        if var_frec_quemada is not None and var_frec_quemada.get():
+            actualizar_vista_cuadrante_4()
+    except Exception:
+        pass
+
+
+def on_scale_frec_umbral_change(val):
+    try:
+        ival = int(float(val))
+        if entry_frec_umbral is not None and entry_frec_umbral.winfo_exists():
+            entry_frec_umbral.delete(0, tk.END)
+            entry_frec_umbral.insert(0, str(ival))
+        if var_frec_quemada is not None and var_frec_quemada.get():
+            actualizar_vista_cuadrante_4()
+    except Exception:
+        pass
+
+
+def on_entry_frec_umbral_change(event=None):
+    try:
+        val = int(entry_frec_umbral.get())
+        if scale_frec_umbral is not None and scale_frec_umbral.winfo_exists():
+            scale_frec_umbral.set(val)
+        if var_frec_quemada is not None and var_frec_quemada.get():
+            actualizar_vista_cuadrante_4()
+    except Exception:
+        pass
+
+
 def on_cambio_filtro(*args):
     tipo = combo_filtro.get()
     if tipo == "Mediana":
@@ -271,40 +421,44 @@ def on_cambio_filtro(*args):
         actualizar_indicador_mascara()
 
 
-def abrir_imagen():
-    global ancho_orig, alto_orig, canal_rojo, canal_verde, canal_azul, vista_orig_tk
+def aplicar_y_mostrar_ruido(densidad):
+    global canal_rojo, canal_verde, canal_azul, densidad_ruido_actual, vista_orig_tk
+    global img_resultado_pil_nativa, zoom_factor, pan_x, pan_y
 
-    ruta = filedialog.askopenfilename(
-        title="Seleccionar imagen",
-        filetypes=[("Imágenes", "*.png *.jpg *.jpeg *.bmp *.ppm"), ("Todos los archivos", "*.*")]
-    )
-    if not ruta:
+    if not canal_rojo_puro or alto_orig == 0 or ancho_orig == 0:
         return
 
-    img_pil = Image.open(ruta).convert("RGB")
-    ancho_orig, alto_orig = img_pil.size
-    pixeles = img_pil.load()
+    densidad_ruido_actual = max(0.0, min(1.0, float(densidad)))
 
-    filas_r, filas_g, filas_b = [], [], []
+    if entrada_ruido is not None and entrada_ruido.winfo_exists():
+        entrada_ruido.delete(0, tk.END)
+        entrada_ruido.insert(0, str(round(densidad_ruido_actual, 3)))
 
-    for f in range(alto_orig):
-        fr, fg, fb = bytearray(ancho_orig), bytearray(ancho_orig), bytearray(ancho_orig)
-        for c in range(ancho_orig):
-            r, g, b = pixeles[c, f][:3]
-            fr[c], fg[c], fb[c] = r, g, b
-        filas_r.append(fr)
-        filas_g.append(fg)
-        filas_b.append(fb)
+    if entrada_ruido_frec is not None and entrada_ruido_frec.winfo_exists():
+        entrada_ruido_frec.delete(0, tk.END)
+        entrada_ruido_frec.insert(0, str(round(densidad_ruido_actual, 3)))
 
-    canal_rojo = filas_r
-    canal_verde = filas_g
-    canal_azul = filas_b
+    if densidad_ruido_actual > 0.0:
+        canal_rojo, canal_verde, canal_azul = aplicar_ruido_sal_pimienta(
+            canal_rojo_puro, canal_verde_puro, canal_azul_puro,
+            alto_orig, ancho_orig, densidad_ruido_actual
+        )
+    else:
+        canal_rojo = [bytearray(fila) for fila in canal_rojo_puro]
+        canal_verde = [bytearray(fila) for fila in canal_verde_puro]
+        canal_azul = [bytearray(fila) for fila in canal_azul_puro]
 
     vista_orig_tk = generar_foto_preview(canal_rojo, canal_verde, canal_azul, alto_orig, ancho_orig)
     lbl_img_original.config(image=vista_orig_tk, text="")
-    lbl_info_original_dim.config(text=f"{alto_orig} x {ancho_orig} px")
 
-    global img_resultado_pil_nativa, zoom_factor, pan_x, pan_y
+    if densidad_ruido_actual > 0:
+        porcentaje = densidad_ruido_actual * 100.0
+        lbl_info_original_dim.config(
+            text=f"{alto_orig} x {ancho_orig} px  |  Ruido: {porcentaje:.1f}% (d={densidad_ruido_actual:.2f})"
+        )
+    else:
+        lbl_info_original_dim.config(text=f"{alto_orig} x {ancho_orig} px  (Sin ruido)")
+
     img_resultado_pil_nativa = None
     zoom_factor = 1.0
     pan_x = 0.0
@@ -323,6 +477,465 @@ def abrir_imagen():
         lbl_zoom_val.config(text="Zoom: 1.00×")
     if btn_ver_mascara is not None and btn_ver_mascara.winfo_exists():
         btn_ver_mascara.config(state=tk.DISABLED)
+
+    actualizar_tab_frecuencia()
+
+
+def on_click_aplicar_ruido_frec():
+    if not canal_rojo_puro:
+        messagebox.showinfo("Aviso", "Primero carga una imagen.")
+        return
+    try:
+        val = float(entrada_ruido_frec.get())
+        if val < 0.0 or val > 1.0:
+            raise ValueError
+    except ValueError:
+        messagebox.showerror("Error", "El parámetro de ruido debe ser un número entre 0.0 y 1.0.")
+        return
+    aplicar_y_mostrar_ruido(val)
+
+
+def actualizar_inspector_fft(f, c):
+    if F_gray_actual is None or alto_orig == 0 or ancho_orig == 0:
+        return
+
+    f = max(0, min(alto_orig - 1, int(f)))
+    c = max(0, min(ancho_orig - 1, int(c)))
+
+    f0 = alto_orig // 2
+    c0 = ancho_orig // 2
+    u = f - f0
+    v = c - c0
+    dist = math.sqrt(u**2 + v**2)
+
+    coef = F_gray_actual[f, c]
+    real_val = float(np.real(coef))
+    imag_val = float(np.imag(coef))
+    mag_val = float(np.abs(coef))
+    fase_deg = float(np.angle(coef, deg=True))
+
+    es_dc = (u == 0 and v == 0)
+    str_dc = "  [Centro DC]" if es_dc else ""
+
+    if lbl_insp_uv and lbl_insp_uv.winfo_exists():
+        lbl_insp_uv.config(text=f"Frecuencia (u, v): ({u:+d}, {v:+d}){str_dc}")
+    if lbl_insp_radio and lbl_insp_radio.winfo_exists():
+        lbl_insp_radio.config(text=f"Radio D(u, v): {dist:.2f} px")
+    if lbl_insp_real and lbl_insp_real.winfo_exists():
+        lbl_insp_real.config(text=f"Parte Real: {real_val:+.3e}")
+    if lbl_insp_imag and lbl_insp_imag.winfo_exists():
+        lbl_insp_imag.config(text=f"Parte Imag: {imag_val:+.3e} j")
+    if lbl_insp_mag and lbl_insp_mag.winfo_exists():
+        lbl_insp_mag.config(text=f"Magnitud |F|: {mag_val:.3e}")
+    if lbl_insp_fase and lbl_insp_fase.winfo_exists():
+        lbl_insp_fase.config(text=f"Fase φ: {fase_deg:+.1f}°")
+
+
+def on_hover_espectro_fft(event):
+    if F_gray_actual is None or frec_fft_w_disp <= 0 or frec_fft_h_disp <= 0:
+        return
+
+    cw = canvas_disp_frec_fft.winfo_width() or MAX_W_QUAD
+    ch = canvas_disp_frec_fft.winfo_height() or MAX_H_QUAD
+
+    offset_x = (cw - frec_fft_w_disp) // 2
+    offset_y = (ch - frec_fft_h_disp) // 2
+
+    rel_x = event.x - offset_x
+    rel_y = event.y - offset_y
+
+    if 0 <= rel_x < frec_fft_w_disp and 0 <= rel_y < frec_fft_h_disp:
+        c = int(rel_x * (ancho_orig - 1) / max(1, frec_fft_w_disp - 1))
+        f = int(rel_y * (alto_orig - 1) / max(1, frec_fft_h_disp - 1))
+        actualizar_inspector_fft(f, c)
+
+
+def on_leave_espectro_fft(event):
+    if F_gray_actual is not None and alto_orig > 0 and ancho_orig > 0:
+        actualizar_inspector_fft(alto_orig // 2, ancho_orig // 2)
+
+
+def actualizar_render_espectro_fft():
+    global foto_frec_fft_tk, frec_fft_w_disp, frec_fft_h_disp
+    if F_gray_actual is None or canvas_disp_frec_fft is None or not canvas_disp_frec_fft.winfo_exists():
+        return
+
+    modo = combo_modo_espectro.get() if combo_modo_espectro else "Magnitud Logarítmica log(1+|F|)"
+
+    if "Máscara" in modo:
+        if H_actual is not None:
+            arr_visual = (H_actual * 255.0).astype(np.uint8)
+        else:
+            d0_val = float(scale_d0.get()) if scale_d0 else 40.0
+            ord_val = int(entry_orden.get()) if entry_orden else 2
+            tipo_val = "bajos" if (combo_tipo_pasa and "Bajos" in combo_tipo_pasa.get()) else "altos"
+            mod_val = combo_modelo_filtro.get().lower() if combo_modelo_filtro else "gaussiano"
+            arr_visual = (generar_mascara_filtro(alto_orig, ancho_orig, tipo_val, mod_val, d0_val, ord_val) * 255.0).astype(np.uint8)
+        if lbl_info_frec_fft and lbl_info_frec_fft.winfo_exists():
+            lbl_info_frec_fft.config(text=f"Máscara Filtro H(u,v) | {alto_orig} x {ancho_orig} px")
+    elif "Real" in modo:
+        arr_visual = generar_espectro_visual(F_gray_actual, "real")
+        if lbl_info_frec_fft and lbl_info_frec_fft.winfo_exists():
+            lbl_info_frec_fft.config(text=f"Parte Real Re{{F(u,v)}} | {alto_orig} x {ancho_orig} px")
+    elif "Imag" in modo:
+        arr_visual = generar_espectro_visual(F_gray_actual, "imaginario")
+        if lbl_info_frec_fft and lbl_info_frec_fft.winfo_exists():
+            lbl_info_frec_fft.config(text=f"Parte Imaginaria Im{{F(u,v)}} | {alto_orig} x {ancho_orig} px")
+    elif "Fase" in modo:
+        arr_visual = generar_espectro_visual(F_gray_actual, "fase")
+        if lbl_info_frec_fft and lbl_info_frec_fft.winfo_exists():
+            lbl_info_frec_fft.config(text=f"Ángulo de Fase φ(u,v) | {alto_orig} x {ancho_orig} px")
+    else:
+        arr_visual = generar_espectro_visual(F_gray_actual, "magnitud")
+        if lbl_info_frec_fft and lbl_info_frec_fft.winfo_exists():
+            lbl_info_frec_fft.config(text=f"Espectro Magnitud log(1+|F|) | {alto_orig} x {ancho_orig} px")
+
+    foto_frec_fft_tk, frec_fft_w_disp, frec_fft_h_disp = generar_foto_preview_array(
+        arr_visual, max_w=MAX_W_QUAD, max_h=MAX_H_QUAD
+    )
+
+    canvas_disp_frec_fft.delete("all")
+    cw = canvas_disp_frec_fft.winfo_width() or MAX_W_QUAD
+    ch = canvas_disp_frec_fft.winfo_height() or MAX_H_QUAD
+    canvas_disp_frec_fft.create_image(cw // 2, ch // 2, anchor="center", image=foto_frec_fft_tk)
+
+    actualizar_inspector_fft(alto_orig // 2, ancho_orig // 2)
+
+
+def on_cambio_modo_espectro(*args):
+    actualizar_render_espectro_fft()
+
+
+def ejecutar_filtro_frecuencia():
+    global r_frec_filtrado, g_frec_filtrado, b_frec_filtrado, H_actual, foto_frec_filtrada_tk
+
+    if alto_orig == 0 or ancho_orig == 0 or not canal_rojo:
+        return
+
+    tipo_pasa_str = combo_tipo_pasa.get() if combo_tipo_pasa else "Pasa Bajos"
+    tipo_pasa = "bajos" if "Bajos" in tipo_pasa_str else "altos"
+
+    modelo_str = combo_modelo_filtro.get() if combo_modelo_filtro else "Gaussiano"
+    modelo = modelo_str.lower()
+
+    try:
+        d0 = float(scale_d0.get()) if scale_d0 else 40.0
+        if d0 <= 0:
+            d0 = 40.0
+    except ValueError:
+        d0 = 40.0
+
+    try:
+        orden = int(entry_orden.get()) if entry_orden else 2
+        if orden < 1:
+            orden = 2
+    except ValueError:
+        orden = 2
+
+    r_filt, g_filt, b_filt, H = filtrar_frecuencia_rgb(
+        canal_rojo, canal_verde, canal_azul, alto_orig, ancho_orig,
+        tipo_pasa=tipo_pasa, modelo=modelo, d0=d0, orden=orden
+    )
+
+    r_frec_filtrado = r_filt
+    g_frec_filtrado = g_filt
+    b_frec_filtrado = b_filt
+    H_actual = H
+
+    if lbl_disp_frec_filtrada and lbl_disp_frec_filtrada.winfo_exists():
+        foto_frec_filtrada_tk, _, _ = generar_foto_preview_rgb(
+            r_filt, g_filt, b_filt, alto_orig, ancho_orig, max_w=MAX_W_QUAD, max_h=MAX_H_QUAD
+        )
+        lbl_disp_frec_filtrada.config(image=foto_frec_filtrada_tk, text="")
+
+    if lbl_info_frec_filtrada and lbl_info_frec_filtrada.winfo_exists():
+        tipo_corto = "Pasa Bajos" if tipo_pasa == "bajos" else "Pasa Altos"
+        info_txt = f"{alto_orig}x{ancho_orig} px | {tipo_corto} ({modelo_str}) | D₀={d0:.0f} px"
+        if "Butter" in modelo_str:
+            info_txt += f" | n={orden}"
+        lbl_info_frec_filtrada.config(text=info_txt)
+
+    if combo_modo_espectro and "Máscara" in combo_modo_espectro.get():
+        actualizar_render_espectro_fft()
+
+    actualizar_vista_cuadrante_4()
+
+
+def actualizar_vista_cuadrante_4():
+    global foto_frec_filtrada_tk
+
+    if alto_orig == 0 or ancho_orig == 0 or r_frec_filtrado is None:
+        return
+
+    # Leer factor de aclarado c
+    factor_c = 1.0
+    if entry_frec_aclarado is not None and entry_frec_aclarado.winfo_exists():
+        try:
+            factor_c = float(entry_frec_aclarado.get())
+            factor_c = max(0.0, min(5.0, factor_c))
+        except ValueError:
+            factor_c = 1.0
+
+    # Leer umbral de binarización
+    u = 128
+    if entry_frec_umbral is not None and entry_frec_umbral.winfo_exists():
+        try:
+            u = int(entry_frec_umbral.get())
+            u = max(0, min(255, u))
+        except ValueError:
+            u = 128
+
+    modo_quemada = combo_frec_modo.get() if combo_frec_modo else "Aclarar (Volver a Normal)"
+    if "Binarizada" in modo_quemada or modo_vista_c4 == "binarizada":
+        modo_param = "binarizada"
+    elif "Bordes" in modo_quemada or modo_vista_c4 == "laplaciano":
+        modo_param = "laplaciano"
+    else:
+        modo_param = "aclarar"
+
+    if var_frec_quemada is not None and var_frec_quemada.get():
+        # Pipeline: Filtrada -> Binarizar -> Mascara Quemada -> Volver a imagen normal a color aclarada
+        r_out, g_out, b_out, _, _ = aplicar_mascara_quemada(
+            r_frec_filtrado, g_frec_filtrado, b_frec_filtrado,
+            alto_orig, ancho_orig,
+            factor_aclarado=factor_c, umbral=u, modo=modo_param
+        )
+        if modo_param == "binarizada":
+            titulo_txt = "4. Paso Intermedio: Imagen Binarizada"
+            info_txt = f"{alto_orig}x{ancho_orig} px | Imagen Binarizada con Umbral={u} (Paso previo a máscara quemada)"
+        elif modo_param == "laplaciano":
+            titulo_txt = "4. Bordes Puros de la Máscara Quemada [-1, 8]"
+            info_txt = f"{alto_orig}x{ancho_orig} px | Bordes extraídos de la binarizada por Máscara Quemada [-1, 8]"
+        else:
+            titulo_txt = "4. Imagen Normal Aclarada con Máscara Quemada"
+            info_txt = f"{alto_orig}x{ancho_orig} px | Aclarada (Umbral={u}, c={factor_c:.2f}) | Imagen normal a color sin borrosidad"
+    else:
+        # Imagen filtrada IFFT normal
+        r_out, g_out, b_out = r_frec_filtrado, g_frec_filtrado, b_frec_filtrado
+        tipo_pasa_str = combo_tipo_pasa.get() if combo_tipo_pasa else "Pasa Bajos"
+        tipo_corto = "Pasa Bajos" if "Bajos" in tipo_pasa_str else "Pasa Altos"
+        modelo_str = combo_modelo_filtro.get() if combo_modelo_filtro else "Gaussiano"
+        d0_val = float(scale_d0.get()) if scale_d0 else 40.0
+        ord_val = int(entry_orden.get()) if entry_orden else 2
+        titulo_txt = "4. Imagen Filtrada en Frecuencia (IFFT)"
+        info_txt = f"{alto_orig}x{ancho_orig} px | {tipo_corto} ({modelo_str}) | D₀={d0_val:.0f} px"
+        if "Butter" in modelo_str:
+            info_txt += f" | n={ord_val}"
+
+    if lbl_disp_frec_filtrada and lbl_disp_frec_filtrada.winfo_exists():
+        foto_frec_filtrada_tk, _, _ = generar_foto_preview_rgb(
+            r_out, g_out, b_out, alto_orig, ancho_orig, max_w=MAX_W_QUAD, max_h=MAX_H_QUAD
+        )
+        lbl_disp_frec_filtrada.config(image=foto_frec_filtrada_tk, text="")
+
+    if lbl_tit_frec_filtrada and lbl_tit_frec_filtrada.winfo_exists():
+        lbl_tit_frec_filtrada.config(text=titulo_txt)
+
+    if lbl_info_frec_filtrada and lbl_info_frec_filtrada.winfo_exists():
+        lbl_info_frec_filtrada.config(text=info_txt)
+
+
+def activar_mascara_quemada_frec():
+    global modo_vista_c4
+    modo_vista_c4 = "aclarar"
+    if var_frec_quemada is not None:
+        var_frec_quemada.set(True)
+    actualizar_vista_cuadrante_4()
+
+
+def previsualizar_binarizada_frec():
+    global modo_vista_c4
+    modo_vista_c4 = "binarizada"
+    if var_frec_quemada is not None:
+        var_frec_quemada.set(True)
+    actualizar_vista_cuadrante_4()
+
+
+def restaurar_filtrada_frec():
+    global modo_vista_c4
+    modo_vista_c4 = "filtrada"
+    if var_frec_quemada is not None:
+        var_frec_quemada.set(False)
+    actualizar_vista_cuadrante_4()
+
+
+def mostrar_matriz_quemada_popup():
+    popup = tk.Toplevel(ventana)
+    popup.title("Detalles de la Máscara Quemada [-1, 8]")
+    popup.geometry("520x350")
+    popup.configure(bg="#1a1a1a")
+    popup.resizable(False, False)
+
+    tk.Label(popup, text="Máscara Quemada [-1, 8] Hardcodeada en Código", bg="#1a1a1a", fg="#ffd700", font=("Arial", 11, "bold")).pack(pady=(12, 4))
+    tk.Label(
+        popup,
+        text="Se aplica sobre la imagen filtrada en frecuencia para aclararla y enfocarla:\ng(x,y) = f(x,y) + c · [ ∇²f(x,y) ]",
+        bg="#1a1a1a", fg="#cccccc", font=("Arial", 9), justify="center"
+    ).pack(pady=(0, 6))
+
+    frame_box = tk.Frame(popup, bg="#0d0d0d", padx=10, pady=8)
+    frame_box.pack(padx=20, pady=4)
+
+    caja = tk.Text(frame_box, bg="#0d0d0d", fg="#4ec9b0", font=("Consolas", 12, "bold"), width=24, height=4, bd=0)
+    caja.pack()
+    caja.insert(tk.END, "  [ -1   -1   -1 ]\n  [ -1    8   -1 ]\n  [ -1   -1   -1 ]\n")
+    caja.config(state=tk.DISABLED)
+
+    tk.Label(
+        popup,
+        text="Efecto: En zonas uniformes el Laplaciano es 0 (no altera el color).\nEn transiciones y bordes, amplifica el contraste eliminando la borrosidad.",
+        bg="#1a1a1a", fg="#9cdcfe", font=("Arial", 8, "italic"), justify="center"
+    ).pack(pady=(6, 10))
+
+    tk.Button(popup, text="Entendido", command=popup.destroy, bg="#333333", fg="white", font=("Arial", 9, "bold"), width=12, relief=tk.FLAT).pack(pady=(0, 10))
+
+
+def actualizar_tab_frecuencia():
+    global foto_frec_orig_tk, foto_frec_ruido_tk
+    global F_r_actual, F_g_actual, F_b_actual, F_gray_actual
+
+    if alto_orig == 0 or ancho_orig == 0 or not canal_rojo_puro:
+        return
+
+    porcentaje = densidad_ruido_actual * 100.0
+
+    if lbl_disp_frec_orig is not None and lbl_disp_frec_orig.winfo_exists():
+        foto_frec_orig_tk, _, _ = generar_foto_preview_rgb(
+            canal_rojo_puro, canal_verde_puro, canal_azul_puro,
+            alto_orig, ancho_orig, max_w=MAX_W_QUAD, max_h=MAX_H_QUAD
+        )
+        lbl_disp_frec_orig.config(image=foto_frec_orig_tk, text="")
+    if lbl_info_frec_orig is not None and lbl_info_frec_orig.winfo_exists():
+        lbl_info_frec_orig.config(text=f"{alto_orig} x {ancho_orig} px (Limpia sin ruido)")
+
+    if lbl_disp_frec_ruido is not None and lbl_disp_frec_ruido.winfo_exists():
+        foto_frec_ruido_tk, _, _ = generar_foto_preview_rgb(
+            canal_rojo, canal_verde, canal_azul,
+            alto_orig, ancho_orig, max_w=MAX_W_QUAD, max_h=MAX_H_QUAD
+        )
+        lbl_disp_frec_ruido.config(image=foto_frec_ruido_tk, text="")
+    if lbl_info_frec_ruido is not None and lbl_info_frec_ruido.winfo_exists():
+        if densidad_ruido_actual > 0:
+            lbl_info_frec_ruido.config(text=f"{alto_orig} x {ancho_orig} px | Ruido: {porcentaje:.1f}% (d={densidad_ruido_actual:.2f})")
+        else:
+            lbl_info_frec_ruido.config(text=f"{alto_orig} x {ancho_orig} px (Sin ruido)")
+
+    if lbl_frec_info_dim is not None and lbl_frec_info_dim.winfo_exists():
+        lbl_frec_info_dim.config(text=f"Imagen: {alto_orig}x{ancho_orig} px | Ruido: {porcentaje:.1f}%")
+
+    F_r_actual, F_g_actual, F_b_actual, F_gray_actual = calcular_fft2_imagen(
+        canal_rojo, canal_verde, canal_azul, alto_orig, ancho_orig
+    )
+
+    actualizar_render_espectro_fft()
+    ejecutar_filtro_frecuencia()
+
+
+def on_scale_d0_change(val):
+    try:
+        fval = float(val)
+        if entry_d0 is not None and entry_d0.winfo_exists():
+            entry_d0.delete(0, tk.END)
+            entry_d0.insert(0, f"{fval:.0f}")
+    except Exception:
+        pass
+
+
+def on_entry_d0_change(event=None):
+    try:
+        val = float(entry_d0.get())
+        if scale_d0 is not None and scale_d0.winfo_exists():
+            scale_d0.set(val)
+    except Exception:
+        pass
+
+
+def on_click_aplicar_ruido():
+    if not canal_rojo_puro:
+        messagebox.showinfo("Aviso", "Primero carga una imagen.")
+        return
+    try:
+        val = float(entrada_ruido.get())
+        if val < 0.0 or val > 1.0:
+            raise ValueError
+    except ValueError:
+        messagebox.showerror("Error", "El parámetro de ruido (imnoise) debe ser un número entre 0.0 y 1.0.")
+        return
+    aplicar_y_mostrar_ruido(val)
+
+
+def on_set_ruido(val):
+    if not canal_rojo_puro:
+        if entrada_ruido is not None and entrada_ruido.winfo_exists():
+            entrada_ruido.delete(0, tk.END)
+            entrada_ruido.insert(0, str(val))
+        return
+    aplicar_y_mostrar_ruido(val)
+
+
+def abrir_imagen():
+    global ancho_orig, alto_orig
+    global canal_rojo_puro, canal_verde_puro, canal_azul_puro
+
+    ruta = filedialog.askopenfilename(
+        title="Seleccionar imagen",
+        filetypes=[("Imágenes", "*.png *.jpg *.jpeg *.bmp *.ppm"), ("Todos los archivos", "*.*")]
+    )
+    if not ruta:
+        return
+
+    try:
+        img_pil = Image.open(ruta).convert("RGB")
+    except Exception as e:
+        messagebox.showerror("Error", f"No se pudo abrir la imagen:\n{e}")
+        return
+
+    ancho_orig, alto_orig = img_pil.size
+    pixeles = img_pil.load()
+
+    filas_r, filas_g, filas_b = [], [], []
+
+    for f in range(alto_orig):
+        fr, fg, fb = bytearray(ancho_orig), bytearray(ancho_orig), bytearray(ancho_orig)
+        for c in range(ancho_orig):
+            r, g, b = pixeles[c, f][:3]
+            fr[c], fg[c], fb[c] = r, g, b
+        filas_r.append(fr)
+        filas_g.append(fg)
+        filas_b.append(fb)
+
+    canal_rojo_puro = filas_r
+    canal_verde_puro = filas_g
+    canal_azul_puro = filas_b
+
+    val_inicial = 0.05
+    if entrada_ruido is not None and entrada_ruido.winfo_exists():
+        try:
+            val_inicial = float(entrada_ruido.get())
+            val_inicial = max(0.0, min(1.0, val_inicial))
+        except ValueError:
+            val_inicial = 0.05
+
+    densidad_pedida = simpledialog.askfloat(
+        "Ruido Sal y Pimienta (imnoise)",
+        "Ingrese el parámetro de ruido d (0.0 a 1.0):\n\n"
+        "• 0.0 = Sin ruido (imagen original limpia)\n"
+        "• 0.05 = Ruido estándar de prueba (5%)\n"
+        "• 0.20 = Ruido moderado (20%)\n"
+        "• 1.00 = Ruido total (100%)\n\n"
+        "Densidad de ruido:",
+        parent=ventana,
+        minvalue=0.0,
+        maxvalue=1.0,
+        initialvalue=val_inicial
+    )
+
+    if densidad_pedida is None:
+        densidad = val_inicial
+    else:
+        densidad = densidad_pedida
+
+    aplicar_y_mostrar_ruido(densidad)
 
 
 def mostrar_matriz_aplicada():
@@ -405,12 +1018,6 @@ def ejecutar_proceso():
             messagebox.showerror("Error", "Verifica que todos los valores de la máscara sean números válidos.")
             return
 
-        es_gauss_enteros = (tam == 3 and
-                            mascara[0] == [1.0, 2.0, 1.0] and
-                            mascara[1] == [2.0, 8.0, 2.0] and
-                            mascara[2] == [1.0, 2.0, 1.0])
-        todos_iguales = all(val == mascara[0][0] for fila in mascara for val in fila)
-
         if es_gauss_enteros:
             nombre_filtro_aplicado_guardado = "Gaussiana Ejemplo"
         elif "Gaussiana" in nombre_mascara_activa:
@@ -472,20 +1079,83 @@ def crear_interfaz():
     global entrada_tamano, combo_filtro, entrada_salto_f, entrada_salto_c, var_padding
     global lbl_img_original, lbl_info_original_dim
     global lbl_img_resultado, lbl_info_resultado_dim, lbl_info_resultado_mascara, lbl_info_resultado_detalles, btn_ver_mascara
-    global canvas_resultado, lbl_zoom_val
+    global canvas_resultado, lbl_zoom_val, entrada_ruido
+
+    # Variables de la pestaña 2 (Frecuencia)
+    global lbl_frec_info_dim, entrada_ruido_frec, combo_tipo_pasa, combo_modelo_filtro
+    global scale_d0, entry_d0, entry_orden, combo_modo_espectro
+    global var_frec_quemada, scale_frec_aclarado, entry_frec_aclarado, scale_frec_umbral, entry_frec_umbral, combo_frec_modo, lbl_tit_frec_filtrada
+    global lbl_info_frec_orig, lbl_disp_frec_orig
+    global lbl_info_frec_ruido, lbl_disp_frec_ruido
+    global lbl_info_frec_fft, canvas_disp_frec_fft
+    global lbl_info_frec_filtrada, lbl_disp_frec_filtrada
+    global lbl_insp_uv, lbl_insp_radio, lbl_insp_real, lbl_insp_imag, lbl_insp_mag, lbl_insp_fase
 
     ventana = tk.Tk()
-    ventana.title("PDI - Convolución Espacial y Reducción por Salto")
-    ventana.geometry("1280x730")
+    ventana.title("PDI - Convolución Espacial, Reducción Dimensional y Filtrado en Frecuencia (FFT 2D)")
+    ventana.geometry("1360x780")
+    ventana.minsize(1260, 720)
     ventana.configure(bg="#181818")
 
-    panel_izq = tk.Frame(ventana, bg="#242424", padx=14, pady=12, width=320)
+    estilo = ttk.Style()
+    try:
+        estilo.theme_use("clam")
+    except Exception:
+        pass
+    estilo.configure("TNotebook", background="#181818", borderwidth=0)
+    estilo.configure(
+        "TNotebook.Tab",
+        background="#252526",
+        foreground="#cccccc",
+        padding=[20, 7],
+        font=("Arial", 9, "bold")
+    )
+    estilo.map(
+        "TNotebook.Tab",
+        background=[("selected", "#0078d4"), ("active", "#333333")],
+        foreground=[("selected", "#ffffff"), ("active", "#ffffff")]
+    )
+
+    notebook = ttk.Notebook(ventana)
+    notebook.pack(fill=tk.BOTH, expand=True)
+
+    tab_espacial = tk.Frame(notebook, bg="#181818")
+    tab_frecuencia = tk.Frame(notebook, bg="#181818")
+
+    notebook.add(tab_espacial, text="  1. Reducción y Convolución Espacial  ")
+    notebook.add(tab_frecuencia, text="  2. Filtrado en Frecuencia (FFT 2D)  ")
+
+    # =========================================================================
+    # PESTAÑA 1: CONVOLUCIÓN ESPACIAL Y REDUCCIÓN POR SALTO
+    # =========================================================================
+    panel_izq = tk.Frame(tab_espacial, bg="#242424", padx=14, pady=12, width=320)
     panel_izq.pack(side=tk.LEFT, fill=tk.Y)
 
+    frame_carga = tk.Frame(panel_izq, bg="#242424")
+    frame_carga.pack(fill=tk.X, pady=(0, 6))
+
     tk.Button(
-        panel_izq, text="1. Cargar Imagen", command=abrir_imagen,
+        frame_carga, text="1. Cargar Imagen", command=abrir_imagen,
         bg="#0078d4", fg="white", font=("Arial", 10, "bold"), width=25, relief=tk.FLAT
-    ).pack(pady=4)
+    ).pack(pady=(2, 4))
+
+    frame_ruido = tk.Frame(frame_carga, bg="#242424")
+    frame_ruido.pack(fill=tk.X, pady=(2, 2))
+
+    tk.Label(frame_ruido, text="Ruido (0-1):", bg="#242424", fg="#ffd700", font=("Arial", 8, "bold")).pack(side=tk.LEFT)
+    entrada_ruido = tk.Entry(frame_ruido, width=6, justify="center", font=("Arial", 8))
+    entrada_ruido.insert(0, "0.05")
+    entrada_ruido.pack(side=tk.LEFT, padx=3)
+
+    tk.Button(
+        frame_ruido, text="Aplicar", command=on_click_aplicar_ruido,
+        bg="#3e3e42", fg="white", font=("Arial", 8, "bold"), relief=tk.FLAT, padx=4
+    ).pack(side=tk.LEFT, padx=2)
+
+    tk.Button(
+        frame_ruido, text="0 (Limpia)", command=lambda: on_set_ruido(0.0),
+        bg="#333333", fg="#aaaaaa", font=("Arial", 8), relief=tk.FLAT, padx=4
+    ).pack(side=tk.LEFT, padx=2)
 
     tk.Label(panel_izq, text="2. Tamaño de la Máscara:", bg="#242424", fg="white", font=("Arial", 9, "bold")).pack(anchor="w", pady=(10, 2))
     frame_dim = tk.Frame(panel_izq, bg="#242424")
@@ -543,7 +1213,7 @@ def crear_interfaz():
         bg="#107c41", fg="white", font=("Arial", 10, "bold"), width=25, relief=tk.FLAT
     ).pack(pady=14)
 
-    panel_der = tk.Frame(ventana, bg="#181818", padx=12, pady=12)
+    panel_der = tk.Frame(tab_espacial, bg="#181818", padx=12, pady=12)
     panel_der.pack(side=tk.RIGHT, fill=tk.BOTH, expand=True)
     panel_der.columnconfigure(0, weight=1)
     panel_der.columnconfigure(1, weight=1)
@@ -630,6 +1300,288 @@ def crear_interfaz():
     lbl_img_resultado = canvas_resultado
 
     cargar_preset_gaussiana_clase()
+
+    # =========================================================================
+    # PESTAÑA 2: FILTRADO EN FRECUENCIA (FFT 2D) - 4 CUADRANTES
+    # =========================================================================
+    panel_izq_frec = tk.Frame(tab_frecuencia, bg="#242424", padx=14, pady=10, width=320)
+    panel_izq_frec.pack(side=tk.LEFT, fill=tk.Y)
+
+    # 1. Cargar imagen y Ruido en Pestaña 2
+    frame_carga_frec = tk.Frame(panel_izq_frec, bg="#242424")
+    frame_carga_frec.pack(fill=tk.X, pady=(0, 4))
+
+    tk.Button(
+        frame_carga_frec, text="1. Cargar Imagen", command=abrir_imagen,
+        bg="#0078d4", fg="white", font=("Arial", 10, "bold"), width=25, relief=tk.FLAT
+    ).pack(pady=(2, 3))
+
+    frame_ruido_frec = tk.Frame(frame_carga_frec, bg="#242424")
+    frame_ruido_frec.pack(fill=tk.X, pady=(2, 2))
+
+    tk.Label(frame_ruido_frec, text="Ruido (0-1):", bg="#242424", fg="#ffd700", font=("Arial", 8, "bold")).pack(side=tk.LEFT)
+    entrada_ruido_frec = tk.Entry(frame_ruido_frec, width=6, justify="center", font=("Arial", 8))
+    entrada_ruido_frec.insert(0, "0.05")
+    entrada_ruido_frec.pack(side=tk.LEFT, padx=3)
+
+    tk.Button(
+        frame_ruido_frec, text="Aplicar", command=on_click_aplicar_ruido_frec,
+        bg="#3e3e42", fg="white", font=("Arial", 8, "bold"), relief=tk.FLAT, padx=4
+    ).pack(side=tk.LEFT, padx=2)
+
+    tk.Button(
+        frame_ruido_frec, text="0 (Limpia)", command=lambda: on_set_ruido(0.0),
+        bg="#333333", fg="#aaaaaa", font=("Arial", 8), relief=tk.FLAT, padx=4
+    ).pack(side=tk.LEFT, padx=2)
+
+    lbl_frec_info_dim = tk.Label(frame_carga_frec, text="Esperando imagen...", bg="#242424", fg="#888888", font=("Arial", 8))
+    lbl_frec_info_dim.pack(pady=(2, 0))
+
+    # 2. Configuración del Filtro FFT
+    tk.Label(panel_izq_frec, text="2. Tipo de Filtro en Frecuencia:", bg="#242424", fg="white", font=("Arial", 9, "bold")).pack(anchor="w", pady=(6, 2))
+    combo_tipo_pasa = tk.StringVar(value="Pasa Bajos (Low-Pass)")
+    menu_tipo_pasa = tk.OptionMenu(
+        panel_izq_frec, combo_tipo_pasa,
+        "Pasa Bajos (Low-Pass)", "Pasa Altos (High-Pass)",
+        command=lambda _: ejecutar_filtro_frecuencia()
+    )
+    menu_tipo_pasa.config(bg="#333333", fg="white", font=("Arial", 9), highlightthickness=0, width=22)
+    menu_tipo_pasa.pack(anchor="w")
+
+    tk.Label(panel_izq_frec, text="3. Modelo Matemático H(u, v):", bg="#242424", fg="white", font=("Arial", 9, "bold")).pack(anchor="w", pady=(6, 2))
+    combo_modelo_filtro = tk.StringVar(value="Gaussiano")
+    menu_modelo = tk.OptionMenu(
+        panel_izq_frec, combo_modelo_filtro,
+        "Gaussiano", "Butterworth", "Ideal",
+        command=lambda _: ejecutar_filtro_frecuencia()
+    )
+    menu_modelo.config(bg="#333333", fg="white", font=("Arial", 9), highlightthickness=0, width=22)
+    menu_modelo.pack(anchor="w")
+
+    tk.Label(panel_izq_frec, text="4. Frecuencia de Corte D₀ (Radio px):", bg="#242424", fg="white", font=("Arial", 9, "bold")).pack(anchor="w", pady=(6, 2))
+    frame_d0 = tk.Frame(panel_izq_frec, bg="#242424")
+    frame_d0.pack(fill=tk.X, pady=(0, 2))
+
+    scale_d0 = tk.Scale(
+        frame_d0, from_=2, to=200, orient=tk.HORIZONTAL, bg="#242424", fg="white",
+        highlightthickness=0, troughcolor="#111111", activebackground="#0078d4",
+        command=on_scale_d0_change
+    )
+    scale_d0.set(40)
+    scale_d0.pack(side=tk.LEFT, fill=tk.X, expand=True)
+    scale_d0.bind("<ButtonRelease-1>", lambda _: ejecutar_filtro_frecuencia())
+
+    entry_d0 = tk.Entry(frame_d0, width=5, justify="center", font=("Arial", 9))
+    entry_d0.insert(0, "40")
+    entry_d0.pack(side=tk.LEFT, padx=(6, 0))
+    entry_d0.bind("<Return>", lambda e: [on_entry_d0_change(), ejecutar_filtro_frecuencia()])
+
+    frame_orden = tk.Frame(panel_izq_frec, bg="#242424")
+    frame_orden.pack(fill=tk.X, pady=(2, 4))
+    tk.Label(frame_orden, text="Orden n (Butterworth):", bg="#242424", fg="lightgray", font=("Arial", 8)).pack(side=tk.LEFT)
+    entry_orden = tk.Entry(frame_orden, width=4, justify="center", font=("Arial", 8))
+    entry_orden.insert(0, "2")
+    entry_orden.pack(side=tk.LEFT, padx=(4, 0))
+    entry_orden.bind("<Return>", lambda e: ejecutar_filtro_frecuencia())
+
+    tk.Button(
+        panel_izq_frec, text="⚡ Aplicar Filtro FFT", command=ejecutar_filtro_frecuencia,
+        bg="#107c41", fg="white", font=("Arial", 10, "bold"), width=25, relief=tk.FLAT
+    ).pack(pady=(4, 6))
+
+    # 3. Inspector de Frecuencias y Números Complejos F(u, v)
+    tk.Label(panel_izq_frec, text="5. Inspector FFT F(u, v) Complejo:", bg="#242424", fg="#4ec9b0", font=("Arial", 9, "bold")).pack(anchor="w", pady=(3, 2))
+
+    frame_insp = tk.Frame(panel_izq_frec, bg="#111111", padx=8, pady=5, bd=1, relief=tk.SOLID)
+    frame_insp.pack(fill=tk.X, pady=(0, 6))
+
+    tk.Label(frame_insp, text="🔬 Coeficiente F(u,v) = R + j·I", bg="#111111", fg="#ffd700", font=("Arial", 8, "bold")).pack(anchor="w")
+    tk.Label(frame_insp, text="(Mueve el cursor sobre el espectro FFT)", bg="#111111", fg="#888888", font=("Arial", 7, "italic")).pack(anchor="w", pady=(0, 2))
+
+    lbl_insp_uv = tk.Label(frame_insp, text="Frecuencia (u, v): (0, 0)  [Centro DC]", bg="#111111", fg="#ffffff", font=("Consolas", 8, "bold"))
+    lbl_insp_uv.pack(anchor="w")
+
+    lbl_insp_radio = tk.Label(frame_insp, text="Radio D(u, v): 0.00 px", bg="#111111", fg="#cccccc", font=("Consolas", 8))
+    lbl_insp_radio.pack(anchor="w")
+
+    lbl_insp_real = tk.Label(frame_insp, text="Parte Real Re: +0.0000e+00", bg="#111111", fg="#4ec9b0", font=("Consolas", 8))
+    lbl_insp_real.pack(anchor="w")
+
+    lbl_insp_imag = tk.Label(frame_insp, text="Parte Imag Im: +0.0000e+00 j", bg="#111111", fg="#ce9178", font=("Consolas", 8, "bold"))
+    lbl_insp_imag.pack(anchor="w")
+
+    lbl_insp_mag = tk.Label(frame_insp, text="Magnitud |F|: 0.0000e+00", bg="#111111", fg="#9cdcfe", font=("Consolas", 8))
+    lbl_insp_mag.pack(anchor="w")
+
+    lbl_insp_fase = tk.Label(frame_insp, text="Fase φ(u, v): 0.0°", bg="#111111", fg="#dcdcaa", font=("Consolas", 8))
+    lbl_insp_fase.pack(anchor="w")
+
+    # 4. Modo de Visualización del Espectro
+    tk.Label(panel_izq_frec, text="6. Modo Visual del Espectro:", bg="#242424", fg="white", font=("Arial", 8, "bold")).pack(anchor="w", pady=(2, 1))
+    combo_modo_espectro = tk.StringVar(value="Magnitud Logarítmica log(1+|F|)")
+    combo_modo_espectro.trace_add("write", on_cambio_modo_espectro)
+    menu_modo = tk.OptionMenu(
+        panel_izq_frec, combo_modo_espectro,
+        "Magnitud Logarítmica log(1+|F|)",
+        "Parte Real Re{F(u,v)}",
+        "Parte Imaginaria Im{F(u,v)}",
+        "Ángulo de Fase φ(u,v)",
+        "Máscara Filtro H(u,v)"
+    )
+    menu_modo.config(bg="#333333", fg="white", font=("Arial", 8), highlightthickness=0, width=24)
+    menu_modo.pack(anchor="w")
+
+    # 7. Máscara Quemada [-1, 8] (Binarizar -> Quemada -> Volver a Normal)
+    frame_post_frec = tk.LabelFrame(
+        panel_izq_frec,
+        text="7. Máscara Quemada [-1, 8] (Aclarar):",
+        bg="#242424", fg="#ffd700", font=("Arial", 8, "bold"),
+        padx=6, pady=3
+    )
+    frame_post_frec.pack(fill=tk.X, pady=(4, 2))
+
+    var_frec_quemada = tk.BooleanVar(value=False)
+    chk_frec_quemada = tk.Checkbutton(
+        frame_post_frec,
+        text="Aplicar Máscara Quemada [-1, 8]",
+        variable=var_frec_quemada,
+        command=lambda: [globals().update(modo_vista_c4="aclarar" if var_frec_quemada.get() else "filtrada"), actualizar_vista_cuadrante_4()],
+        bg="#242424", fg="white", selectcolor="#111111", font=("Arial", 8, "bold")
+    )
+    chk_frec_quemada.pack(anchor="w")
+
+    frame_c_frec = tk.Frame(frame_post_frec, bg="#242424")
+    frame_c_frec.pack(fill=tk.X, pady=(1, 1))
+    tk.Label(frame_c_frec, text="Aclarado (c):", bg="#242424", fg="lightgray", font=("Arial", 8)).pack(side=tk.LEFT)
+    scale_frec_aclarado = tk.Scale(
+        frame_c_frec, from_=0.1, to=3.0, resolution=0.1, orient=tk.HORIZONTAL, bg="#242424", fg="white",
+        highlightthickness=0, troughcolor="#111111", activebackground="#0078d4",
+        command=on_scale_frec_aclarado_change
+    )
+    scale_frec_aclarado.set(1.0)
+    scale_frec_aclarado.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=2)
+    entry_frec_aclarado = tk.Entry(frame_c_frec, width=4, justify="center", font=("Arial", 8))
+    entry_frec_aclarado.insert(0, "1.00")
+    entry_frec_aclarado.pack(side=tk.LEFT)
+    entry_frec_aclarado.bind("<Return>", on_entry_frec_aclarado_change)
+
+    frame_u_frec = tk.Frame(frame_post_frec, bg="#242424")
+    frame_u_frec.pack(fill=tk.X, pady=(1, 1))
+    tk.Label(frame_u_frec, text="Umbral Bin:", bg="#242424", fg="lightgray", font=("Arial", 8)).pack(side=tk.LEFT)
+    scale_frec_umbral = tk.Scale(
+        frame_u_frec, from_=0, to=255, orient=tk.HORIZONTAL, bg="#242424", fg="white",
+        highlightthickness=0, troughcolor="#111111", activebackground="#0078d4",
+        command=on_scale_frec_umbral_change
+    )
+    scale_frec_umbral.set(128)
+    scale_frec_umbral.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=2)
+    entry_frec_umbral = tk.Entry(frame_u_frec, width=4, justify="center", font=("Arial", 8))
+    entry_frec_umbral.insert(0, "128")
+    entry_frec_umbral.pack(side=tk.LEFT)
+    entry_frec_umbral.bind("<Return>", on_entry_frec_umbral_change)
+
+    frame_modo = tk.Frame(frame_post_frec, bg="#242424")
+    frame_modo.pack(fill=tk.X, pady=(1, 2))
+    tk.Label(frame_modo, text="Modo:", bg="#242424", fg="lightgray", font=("Arial", 8)).pack(side=tk.LEFT)
+    combo_frec_modo = tk.StringVar(value="Aclarar (Volver a Normal)")
+    menu_modo_q = tk.OptionMenu(
+        frame_modo, combo_frec_modo,
+        "Aclarar (Volver a Normal)", "Ver Solo Binarizada", "Solo Bordes (|Laplaciano|)",
+        command=lambda _: actualizar_vista_cuadrante_4()
+    )
+    menu_modo_q.config(bg="#333333", fg="white", font=("Arial", 8), highlightthickness=0)
+    menu_modo_q.pack(side=tk.LEFT, fill=tk.X, expand=True)
+
+    frame_btn_quemada = tk.Frame(frame_post_frec, bg="#242424")
+    frame_btn_quemada.pack(fill=tk.X, pady=(2, 1))
+
+    tk.Button(
+        frame_btn_quemada, text="★ Aclarar (Normal)",
+        command=activar_mascara_quemada_frec,
+        bg="#c73a00", fg="white", font=("Arial", 7, "bold"), relief=tk.FLAT
+    ).pack(side=tk.LEFT, padx=1, expand=True, fill=tk.X)
+
+    tk.Button(
+        frame_btn_quemada, text="👁 Binarizada",
+        command=previsualizar_binarizada_frec,
+        bg="#3e3e42", fg="white", font=("Arial", 7), relief=tk.FLAT
+    ).pack(side=tk.LEFT, padx=1, expand=True, fill=tk.X)
+
+    tk.Button(
+        frame_btn_quemada, text="↺ Filtrada Normal",
+        command=restaurar_filtrada_frec,
+        bg="#333333", fg="#cccccc", font=("Arial", 7), relief=tk.FLAT
+    ).pack(side=tk.LEFT, padx=1, expand=True, fill=tk.X)
+
+    tk.Button(
+        frame_post_frec, text="📄 Ver Matriz Quemada [-1, 8]",
+        command=mostrar_matriz_quemada_popup,
+        bg="#2d2d30", fg="#4ec9b0", font=("Arial", 7), relief=tk.FLAT
+    ).pack(fill=tk.X, pady=(2, 0))
+
+    # Paneles de la derecha para los 4 cuadrantes
+    panel_der_frec = tk.Frame(tab_frecuencia, bg="#181818", padx=8, pady=6)
+    panel_der_frec.pack(side=tk.RIGHT, fill=tk.BOTH, expand=True)
+    panel_der_frec.columnconfigure(0, weight=1)
+    panel_der_frec.columnconfigure(1, weight=1)
+    panel_der_frec.rowconfigure(0, weight=1)
+    panel_der_frec.rowconfigure(1, weight=1)
+
+    # --- CUADRANTE 1: Imagen Original f(x,y) ---
+    c1 = tk.Frame(panel_der_frec, bg="#202020", padx=6, pady=4, bd=1, relief=tk.SOLID)
+    c1.grid(row=0, column=0, padx=4, pady=4, sticky="nsew")
+    tk.Label(c1, text="1. Imagen Original f(x,y)", bg="#202020", fg="white", font=("Arial", 10, "bold")).pack()
+    lbl_info_frec_orig = tk.Label(c1, text="Esperando imagen...", bg="#202020", fg="#888888", font=("Arial", 8))
+    lbl_info_frec_orig.pack(pady=(0, 2))
+    frame_disp_c1 = tk.Frame(c1, bg="#0d0d0d", width=MAX_W_QUAD, height=MAX_H_QUAD)
+    frame_disp_c1.pack(expand=True, fill=tk.BOTH)
+    frame_disp_c1.pack_propagate(False)
+    lbl_disp_frec_orig = tk.Label(frame_disp_c1, bg="#0d0d0d", text="Sin imagen cargada", fg="#555555")
+    lbl_disp_frec_orig.pack(expand=True)
+
+    # --- CUADRANTE 2: Imagen con Ruido g(x,y) ---
+    c2 = tk.Frame(panel_der_frec, bg="#202020", padx=6, pady=4, bd=1, relief=tk.SOLID)
+    c2.grid(row=0, column=1, padx=4, pady=4, sticky="nsew")
+    tk.Label(c2, text="2. Imagen con Ruido g(x,y)", bg="#202020", fg="#ffd700", font=("Arial", 10, "bold")).pack()
+    lbl_info_frec_ruido = tk.Label(c2, text="Sin ruido", bg="#202020", fg="#ffd700", font=("Arial", 8))
+    lbl_info_frec_ruido.pack(pady=(0, 2))
+    frame_disp_c2 = tk.Frame(c2, bg="#0d0d0d", width=MAX_W_QUAD, height=MAX_H_QUAD)
+    frame_disp_c2.pack(expand=True, fill=tk.BOTH)
+    frame_disp_c2.pack_propagate(False)
+    lbl_disp_frec_ruido = tk.Label(frame_disp_c2, bg="#0d0d0d", text="Sin imagen con ruido", fg="#555555")
+    lbl_disp_frec_ruido.pack(expand=True)
+
+    # --- CUADRANTE 3: Espectro FFT 2D (con valores complejos e imaginarios) ---
+    c3 = tk.Frame(panel_der_frec, bg="#202020", padx=6, pady=4, bd=1, relief=tk.SOLID)
+    c3.grid(row=1, column=0, padx=4, pady=4, sticky="nsew")
+    tk.Label(c3, text="3. Espectro FFT 2D a partir de Imagen con Ruido", bg="#202020", fg="#4ec9b0", font=("Arial", 10, "bold")).pack()
+    lbl_info_frec_fft = tk.Label(c3, text="Mueve el ratón para inspeccionar frecuencia y componentes imaginarios", bg="#202020", fg="#4ec9b0", font=("Arial", 8))
+    lbl_info_frec_fft.pack(pady=(0, 2))
+    frame_disp_c3 = tk.Frame(c3, bg="#0d0d0d", width=MAX_W_QUAD, height=MAX_H_QUAD)
+    frame_disp_c3.pack(expand=True, fill=tk.BOTH)
+    frame_disp_c3.pack_propagate(False)
+    canvas_disp_frec_fft = tk.Canvas(frame_disp_c3, bg="#0d0d0d", width=MAX_W_QUAD, height=MAX_H_QUAD, highlightthickness=0, cursor="crosshair")
+    canvas_disp_frec_fft.pack(expand=True)
+    canvas_disp_frec_fft.create_text(
+        MAX_W_QUAD // 2, MAX_H_QUAD // 2,
+        text="Sin espectro FFT\n(Carga una imagen para generar la transformada de Fourier 2D)",
+        fill="#555555", font=("Arial", 9), justify="center", tags="placeholder"
+    )
+    canvas_disp_frec_fft.bind("<Motion>", on_hover_espectro_fft)
+    canvas_disp_frec_fft.bind("<Leave>", on_leave_espectro_fft)
+
+    # --- CUADRANTE 4: Imagen Filtrada (IFFT) ---
+    c4 = tk.Frame(panel_der_frec, bg="#202020", padx=6, pady=4, bd=1, relief=tk.SOLID)
+    c4.grid(row=1, column=1, padx=4, pady=4, sticky="nsew")
+    lbl_tit_frec_filtrada = tk.Label(c4, text="4. Imagen Filtrada en Frecuencia (IFFT)", bg="#202020", fg="#9cdcfe", font=("Arial", 10, "bold"))
+    lbl_tit_frec_filtrada.pack()
+    lbl_info_frec_filtrada = tk.Label(c4, text="Sin filtrar (Presiona 'Aplicar Filtro FFT')", bg="#202020", fg="#9cdcfe", font=("Arial", 8))
+    lbl_info_frec_filtrada.pack(pady=(0, 2))
+    frame_disp_c4 = tk.Frame(c4, bg="#0d0d0d", width=MAX_W_QUAD, height=MAX_H_QUAD)
+    frame_disp_c4.pack(expand=True, fill=tk.BOTH)
+    frame_disp_c4.pack_propagate(False)
+    lbl_disp_frec_filtrada = tk.Label(frame_disp_c4, bg="#0d0d0d", text="Sin resultado filtrado", fg="#555555")
+    lbl_disp_frec_filtrada.pack(expand=True)
 
     return ventana
 
