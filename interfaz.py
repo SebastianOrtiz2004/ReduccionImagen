@@ -13,14 +13,12 @@ from reduccion import (
     procesar_canal,
     calcular_matriz_gaussiana,
     MASCARA_GAUSSIANA_3X3,
+    MASCARA_QUEMADA_3X3,
     aplicar_ruido_sal_pimienta,
-    imnoise,
     calcular_fft2_imagen,
     generar_espectro_visual,
     generar_mascara_filtro,
     filtrar_frecuencia_rgb,
-    MASCARA_QUEMADA_3X3,
-    binarizar_canales,
     aplicar_mascara_quemada,
 )
 
@@ -36,15 +34,9 @@ densidad_ruido_actual = 0.0
 entrada_ruido = None
 entrada_ruido_frec = None
 
-# Variables para Pestaña 2: Máscara Quemada [-1, 8] Antidesenfoque / Aclarar
+# Variable para Pestaña 2: Aplicar Máscara de Acentuado [-1, 8] sobre la salida IFFT
 var_frec_quemada = None
-scale_frec_aclarado = None
-entry_frec_aclarado = None
-scale_frec_umbral = None
-entry_frec_umbral = None
-combo_frec_modo = None
 lbl_tit_frec_filtrada = None
-modo_vista_c4 = "filtrada"
 
 # Variables para Pestaña 2: Filtrado en Frecuencia (FFT 2D)
 F_r_actual = None
@@ -365,50 +357,16 @@ def cargar_preset_media():
     actualizar_indicador_mascara("Media")
 
 
-def on_scale_frec_aclarado_change(val):
-    try:
-        fval = float(val)
-        if entry_frec_aclarado is not None and entry_frec_aclarado.winfo_exists():
-            entry_frec_aclarado.delete(0, tk.END)
-            entry_frec_aclarado.insert(0, f"{fval:.2f}")
-        if var_frec_quemada is not None and var_frec_quemada.get():
-            actualizar_vista_cuadrante_4()
-    except Exception:
-        pass
-
-
-def on_entry_frec_aclarado_change(event=None):
-    try:
-        val = float(entry_frec_aclarado.get())
-        if scale_frec_aclarado is not None and scale_frec_aclarado.winfo_exists():
-            scale_frec_aclarado.set(val)
-        if var_frec_quemada is not None and var_frec_quemada.get():
-            actualizar_vista_cuadrante_4()
-    except Exception:
-        pass
-
-
-def on_scale_frec_umbral_change(val):
-    try:
-        ival = int(float(val))
-        if entry_frec_umbral is not None and entry_frec_umbral.winfo_exists():
-            entry_frec_umbral.delete(0, tk.END)
-            entry_frec_umbral.insert(0, str(ival))
-        if var_frec_quemada is not None and var_frec_quemada.get():
-            actualizar_vista_cuadrante_4()
-    except Exception:
-        pass
-
-
-def on_entry_frec_umbral_change(event=None):
-    try:
-        val = int(entry_frec_umbral.get())
-        if scale_frec_umbral is not None and scale_frec_umbral.winfo_exists():
-            scale_frec_umbral.set(val)
-        if var_frec_quemada is not None and var_frec_quemada.get():
-            actualizar_vista_cuadrante_4()
-    except Exception:
-        pass
+def cargar_preset_acentuado():
+    entrada_tamano.delete(0, tk.END)
+    entrada_tamano.insert(0, "3")
+    crear_cuadricula_vacia()
+    for i in range(3):
+        for j in range(3):
+            entradas_matriz[i][j].delete(0, tk.END)
+            entradas_matriz[i][j].insert(0, str(MASCARA_QUEMADA_3X3[i][j]))
+    combo_filtro.set("Máscara (Convolución)")
+    actualizar_indicador_mascara("Acentuado [-1, 8]")
 
 
 def on_cambio_filtro(*args):
@@ -607,7 +565,7 @@ def on_cambio_modo_espectro(*args):
 
 
 def ejecutar_filtro_frecuencia():
-    global r_frec_filtrado, g_frec_filtrado, b_frec_filtrado, H_actual, foto_frec_filtrada_tk
+    global r_frec_filtrado, g_frec_filtrado, b_frec_filtrado, H_actual
 
     if alto_orig == 0 or ancho_orig == 0 or not canal_rojo:
         return
@@ -642,19 +600,6 @@ def ejecutar_filtro_frecuencia():
     b_frec_filtrado = b_filt
     H_actual = H
 
-    if lbl_disp_frec_filtrada and lbl_disp_frec_filtrada.winfo_exists():
-        foto_frec_filtrada_tk, _, _ = generar_foto_preview_rgb(
-            r_filt, g_filt, b_filt, alto_orig, ancho_orig, max_w=MAX_W_QUAD, max_h=MAX_H_QUAD
-        )
-        lbl_disp_frec_filtrada.config(image=foto_frec_filtrada_tk, text="")
-
-    if lbl_info_frec_filtrada and lbl_info_frec_filtrada.winfo_exists():
-        tipo_corto = "Pasa Bajos" if tipo_pasa == "bajos" else "Pasa Altos"
-        info_txt = f"{alto_orig}x{ancho_orig} px | {tipo_corto} ({modelo_str}) | D₀={d0:.0f} px"
-        if "Butter" in modelo_str:
-            info_txt += f" | n={orden}"
-        lbl_info_frec_filtrada.config(text=info_txt)
-
     if combo_modo_espectro and "Máscara" in combo_modo_espectro.get():
         actualizar_render_espectro_fft()
 
@@ -667,48 +612,14 @@ def actualizar_vista_cuadrante_4():
     if alto_orig == 0 or ancho_orig == 0 or r_frec_filtrado is None:
         return
 
-    # Leer factor de aclarado c
-    factor_c = 1.0
-    if entry_frec_aclarado is not None and entry_frec_aclarado.winfo_exists():
-        try:
-            factor_c = float(entry_frec_aclarado.get())
-            factor_c = max(0.0, min(5.0, factor_c))
-        except ValueError:
-            factor_c = 1.0
-
-    # Leer umbral de binarización
-    u = 128
-    if entry_frec_umbral is not None and entry_frec_umbral.winfo_exists():
-        try:
-            u = int(entry_frec_umbral.get())
-            u = max(0, min(255, u))
-        except ValueError:
-            u = 128
-
-    modo_quemada = combo_frec_modo.get() if combo_frec_modo else "Aclarar (Volver a Normal)"
-    if "Binarizada" in modo_quemada or modo_vista_c4 == "binarizada":
-        modo_param = "binarizada"
-    elif "Bordes" in modo_quemada or modo_vista_c4 == "laplaciano":
-        modo_param = "laplaciano"
-    else:
-        modo_param = "aclarar"
-
     if var_frec_quemada is not None and var_frec_quemada.get():
-        # Pipeline: Filtrada -> Binarizar -> Mascara Quemada -> Volver a imagen normal a color aclarada
+        # Aplicar únicamente la máscara de acentuado [-1, 8, -1] sobre la imagen IFFT
         r_out, g_out, b_out, _, _ = aplicar_mascara_quemada(
             r_frec_filtrado, g_frec_filtrado, b_frec_filtrado,
-            alto_orig, ancho_orig,
-            factor_aclarado=factor_c, umbral=u, modo=modo_param
+            alto_orig, ancho_orig
         )
-        if modo_param == "binarizada":
-            titulo_txt = "4. Paso Intermedio: Imagen Binarizada"
-            info_txt = f"{alto_orig}x{ancho_orig} px | Imagen Binarizada con Umbral={u} (Paso previo a máscara quemada)"
-        elif modo_param == "laplaciano":
-            titulo_txt = "4. Bordes Puros de la Máscara Quemada [-1, 8]"
-            info_txt = f"{alto_orig}x{ancho_orig} px | Bordes extraídos de la binarizada por Máscara Quemada [-1, 8]"
-        else:
-            titulo_txt = "4. Imagen Normal Aclarada con Máscara Quemada"
-            info_txt = f"{alto_orig}x{ancho_orig} px | Aclarada (Umbral={u}, c={factor_c:.2f}) | Imagen normal a color sin borrosidad"
+        titulo_txt = "4. Imagen IFFT + Filtro Acentuado [-1, 8]"
+        info_txt = f"{alto_orig}x{ancho_orig} px | Convolución directa con máscara quemada [-1, 8] (Suma de pesos = 0)"
     else:
         # Imagen filtrada IFFT normal
         r_out, g_out, b_out = r_frec_filtrado, g_frec_filtrado, b_frec_filtrado
@@ -735,41 +646,17 @@ def actualizar_vista_cuadrante_4():
         lbl_info_frec_filtrada.config(text=info_txt)
 
 
-def activar_mascara_quemada_frec():
-    global modo_vista_c4
-    modo_vista_c4 = "aclarar"
-    if var_frec_quemada is not None:
-        var_frec_quemada.set(True)
-    actualizar_vista_cuadrante_4()
-
-
-def previsualizar_binarizada_frec():
-    global modo_vista_c4
-    modo_vista_c4 = "binarizada"
-    if var_frec_quemada is not None:
-        var_frec_quemada.set(True)
-    actualizar_vista_cuadrante_4()
-
-
-def restaurar_filtrada_frec():
-    global modo_vista_c4
-    modo_vista_c4 = "filtrada"
-    if var_frec_quemada is not None:
-        var_frec_quemada.set(False)
-    actualizar_vista_cuadrante_4()
-
-
 def mostrar_matriz_quemada_popup():
     popup = tk.Toplevel(ventana)
-    popup.title("Detalles de la Máscara Quemada [-1, 8]")
-    popup.geometry("520x350")
+    popup.title("Detalles de la Máscara de Acentuado [-1, 8]")
+    popup.geometry("500x330")
     popup.configure(bg="#1a1a1a")
     popup.resizable(False, False)
 
-    tk.Label(popup, text="Máscara Quemada [-1, 8] Hardcodeada en Código", bg="#1a1a1a", fg="#ffd700", font=("Arial", 11, "bold")).pack(pady=(12, 4))
+    tk.Label(popup, text="Filtro Pasa-Altos de Acentuado 3x3 (Quemado en Código)", bg="#1a1a1a", fg="#ffd700", font=("Arial", 11, "bold")).pack(pady=(12, 4))
     tk.Label(
         popup,
-        text="Se aplica sobre la imagen filtrada en frecuencia para aclararla y enfocarla:\ng(x,y) = f(x,y) + c · [ ∇²f(x,y) ]",
+        text="Se aplica directamente por convolución sobre la imagen salida de la IFFT:",
         bg="#1a1a1a", fg="#cccccc", font=("Arial", 9), justify="center"
     ).pack(pady=(0, 6))
 
@@ -783,11 +670,11 @@ def mostrar_matriz_quemada_popup():
 
     tk.Label(
         popup,
-        text="Efecto: En zonas uniformes el Laplaciano es 0 (no altera el color).\nEn transiciones y bordes, amplifica el contraste eliminando la borrosidad.",
+        text="Suma de pesos = 0.\nLas regiones de intensidad constante dan 0 y se acentúan las orillas.",
         bg="#1a1a1a", fg="#9cdcfe", font=("Arial", 8, "italic"), justify="center"
     ).pack(pady=(6, 10))
 
-    tk.Button(popup, text="Entendido", command=popup.destroy, bg="#333333", fg="white", font=("Arial", 9, "bold"), width=12, relief=tk.FLAT).pack(pady=(0, 10))
+    tk.Button(popup, text="Cerrar", command=popup.destroy, bg="#333333", fg="white", font=("Arial", 9, "bold"), width=12, relief=tk.FLAT).pack(pady=(0, 10))
 
 
 def actualizar_tab_frecuencia():
@@ -955,7 +842,9 @@ def mostrar_matriz_aplicada():
     if mascara_aplicada_guardada:
         tam = len(mascara_aplicada_guardada)
         texto_sum = f"Dimensión: {tam}x{tam}  |  Suma de coeficientes: {suma_pesos_guardada:.4f}"
-        if abs(suma_pesos_guardada - 1.0) > 1e-4:
+        if abs(suma_pesos_guardada) < 1e-6:
+            texto_sum += "\n(Suma de pesos = 0: Filtro de acentuado pasa-altos; regiones constantes dan 0)"
+        elif abs(suma_pesos_guardada - 1.0) > 1e-4:
             texto_sum += f"\n(Se normalizó dividiendo la convolución entre {suma_pesos_guardada:.2f})"
         else:
             texto_sum += "\n(La máscara está normalizada con suma total = 1.0)"
@@ -1018,8 +907,24 @@ def ejecutar_proceso():
             messagebox.showerror("Error", "Verifica que todos los valores de la máscara sean números válidos.")
             return
 
+        es_gauss_enteros = (
+            tam == 3 and
+            mascara[0] == [1.0, 2.0, 1.0] and
+            mascara[1] == [2.0, 8.0, 2.0] and
+            mascara[2] == [1.0, 2.0, 1.0]
+        )
+        es_acentuado_quemada = (
+            tam == 3 and
+            mascara[0] == [-1.0, -1.0, -1.0] and
+            mascara[1] == [-1.0, 8.0, -1.0] and
+            mascara[2] == [-1.0, -1.0, -1.0]
+        )
+        todos_iguales = all(val == mascara[0][0] for fila in mascara for val in fila)
+
         if es_gauss_enteros:
             nombre_filtro_aplicado_guardado = "Gaussiana Ejemplo"
+        elif es_acentuado_quemada:
+            nombre_filtro_aplicado_guardado = "Acentuado [-1, 8]"
         elif "Gaussiana" in nombre_mascara_activa:
             nombre_filtro_aplicado_guardado = "Gaussiana"
         elif todos_iguales:
@@ -1029,8 +934,6 @@ def ejecutar_proceso():
 
         mascara_aplicada_guardada = mascara
         suma_pesos_guardada = sum(sum(fila) for fila in mascara)
-        if suma_pesos_guardada == 0:
-            suma_pesos_guardada = 1.0
     else:
         nombre_filtro_aplicado_guardado = tipo
         mascara_aplicada_guardada = []
@@ -1084,7 +987,7 @@ def crear_interfaz():
     # Variables de la pestaña 2 (Frecuencia)
     global lbl_frec_info_dim, entrada_ruido_frec, combo_tipo_pasa, combo_modelo_filtro
     global scale_d0, entry_d0, entry_orden, combo_modo_espectro
-    global var_frec_quemada, scale_frec_aclarado, entry_frec_aclarado, scale_frec_umbral, entry_frec_umbral, combo_frec_modo, lbl_tit_frec_filtrada
+    global var_frec_quemada, lbl_tit_frec_filtrada
     global lbl_info_frec_orig, lbl_disp_frec_orig
     global lbl_info_frec_ruido, lbl_disp_frec_ruido
     global lbl_info_frec_fft, canvas_disp_frec_fft
@@ -1184,9 +1087,10 @@ def crear_interfaz():
 
     frame_presets = tk.Frame(panel_izq, bg="#242424")
     frame_presets.pack(pady=4)
-    tk.Button(frame_presets, text="Calcular Gaussiana", command=calcular_gaussiana_en_cuadricula, bg="#0e639c", fg="white", font=("Arial", 8, "bold"), relief=tk.FLAT).pack(side=tk.LEFT, padx=2)
-    tk.Button(frame_presets, text="Gaussiana Ejemplo", command=cargar_preset_gaussiana_clase, bg="#333333", fg="white", font=("Arial", 8), relief=tk.FLAT).pack(side=tk.LEFT, padx=2)
-    tk.Button(frame_presets, text="Media", command=cargar_preset_media, bg="#333333", fg="white", font=("Arial", 8), relief=tk.FLAT).pack(side=tk.LEFT, padx=2)
+    tk.Button(frame_presets, text="Gaussiana", command=calcular_gaussiana_en_cuadricula, bg="#0e639c", fg="white", font=("Arial", 8, "bold"), relief=tk.FLAT).pack(side=tk.LEFT, padx=1)
+    tk.Button(frame_presets, text="Ejemplo 3x3", command=cargar_preset_gaussiana_clase, bg="#333333", fg="white", font=("Arial", 8), relief=tk.FLAT).pack(side=tk.LEFT, padx=1)
+    tk.Button(frame_presets, text="Media", command=cargar_preset_media, bg="#333333", fg="white", font=("Arial", 8), relief=tk.FLAT).pack(side=tk.LEFT, padx=1)
+    tk.Button(frame_presets, text="[-1, 8]", command=cargar_preset_acentuado, bg="#8e44ad", fg="white", font=("Arial", 8, "bold"), relief=tk.FLAT).pack(side=tk.LEFT, padx=1)
 
     tk.Label(panel_izq, text="5. Salto de Reducción:", bg="#242424", fg="white", font=("Arial", 9, "bold")).pack(anchor="w", pady=(10, 2))
     frame_saltos = tk.Frame(panel_izq, bg="#242424")
@@ -1431,92 +1335,29 @@ def crear_interfaz():
     menu_modo.config(bg="#333333", fg="white", font=("Arial", 8), highlightthickness=0, width=24)
     menu_modo.pack(anchor="w")
 
-    # 7. Máscara Quemada [-1, 8] (Binarizar -> Quemada -> Volver a Normal)
+    # 5. Aplicación directa del Filtro de Acentuado [-1, 8, -1] quemado en código
     frame_post_frec = tk.LabelFrame(
         panel_izq_frec,
-        text="7. Máscara Quemada [-1, 8] (Aclarar):",
+        text="7. Filtro de Acentuado [-1, 8] sobre IFFT:",
         bg="#242424", fg="#ffd700", font=("Arial", 8, "bold"),
-        padx=6, pady=3
+        padx=6, pady=6
     )
-    frame_post_frec.pack(fill=tk.X, pady=(4, 2))
+    frame_post_frec.pack(fill=tk.X, pady=(8, 2))
 
     var_frec_quemada = tk.BooleanVar(value=False)
     chk_frec_quemada = tk.Checkbutton(
         frame_post_frec,
         text="Aplicar Máscara Quemada [-1, 8]",
         variable=var_frec_quemada,
-        command=lambda: [globals().update(modo_vista_c4="aclarar" if var_frec_quemada.get() else "filtrada"), actualizar_vista_cuadrante_4()],
+        command=actualizar_vista_cuadrante_4,
         bg="#242424", fg="white", selectcolor="#111111", font=("Arial", 8, "bold")
     )
-    chk_frec_quemada.pack(anchor="w")
-
-    frame_c_frec = tk.Frame(frame_post_frec, bg="#242424")
-    frame_c_frec.pack(fill=tk.X, pady=(1, 1))
-    tk.Label(frame_c_frec, text="Aclarado (c):", bg="#242424", fg="lightgray", font=("Arial", 8)).pack(side=tk.LEFT)
-    scale_frec_aclarado = tk.Scale(
-        frame_c_frec, from_=0.1, to=3.0, resolution=0.1, orient=tk.HORIZONTAL, bg="#242424", fg="white",
-        highlightthickness=0, troughcolor="#111111", activebackground="#0078d4",
-        command=on_scale_frec_aclarado_change
-    )
-    scale_frec_aclarado.set(1.0)
-    scale_frec_aclarado.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=2)
-    entry_frec_aclarado = tk.Entry(frame_c_frec, width=4, justify="center", font=("Arial", 8))
-    entry_frec_aclarado.insert(0, "1.00")
-    entry_frec_aclarado.pack(side=tk.LEFT)
-    entry_frec_aclarado.bind("<Return>", on_entry_frec_aclarado_change)
-
-    frame_u_frec = tk.Frame(frame_post_frec, bg="#242424")
-    frame_u_frec.pack(fill=tk.X, pady=(1, 1))
-    tk.Label(frame_u_frec, text="Umbral Bin:", bg="#242424", fg="lightgray", font=("Arial", 8)).pack(side=tk.LEFT)
-    scale_frec_umbral = tk.Scale(
-        frame_u_frec, from_=0, to=255, orient=tk.HORIZONTAL, bg="#242424", fg="white",
-        highlightthickness=0, troughcolor="#111111", activebackground="#0078d4",
-        command=on_scale_frec_umbral_change
-    )
-    scale_frec_umbral.set(128)
-    scale_frec_umbral.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=2)
-    entry_frec_umbral = tk.Entry(frame_u_frec, width=4, justify="center", font=("Arial", 8))
-    entry_frec_umbral.insert(0, "128")
-    entry_frec_umbral.pack(side=tk.LEFT)
-    entry_frec_umbral.bind("<Return>", on_entry_frec_umbral_change)
-
-    frame_modo = tk.Frame(frame_post_frec, bg="#242424")
-    frame_modo.pack(fill=tk.X, pady=(1, 2))
-    tk.Label(frame_modo, text="Modo:", bg="#242424", fg="lightgray", font=("Arial", 8)).pack(side=tk.LEFT)
-    combo_frec_modo = tk.StringVar(value="Aclarar (Volver a Normal)")
-    menu_modo_q = tk.OptionMenu(
-        frame_modo, combo_frec_modo,
-        "Aclarar (Volver a Normal)", "Ver Solo Binarizada", "Solo Bordes (|Laplaciano|)",
-        command=lambda _: actualizar_vista_cuadrante_4()
-    )
-    menu_modo_q.config(bg="#333333", fg="white", font=("Arial", 8), highlightthickness=0)
-    menu_modo_q.pack(side=tk.LEFT, fill=tk.X, expand=True)
-
-    frame_btn_quemada = tk.Frame(frame_post_frec, bg="#242424")
-    frame_btn_quemada.pack(fill=tk.X, pady=(2, 1))
-
-    tk.Button(
-        frame_btn_quemada, text="★ Aclarar (Normal)",
-        command=activar_mascara_quemada_frec,
-        bg="#c73a00", fg="white", font=("Arial", 7, "bold"), relief=tk.FLAT
-    ).pack(side=tk.LEFT, padx=1, expand=True, fill=tk.X)
-
-    tk.Button(
-        frame_btn_quemada, text="👁 Binarizada",
-        command=previsualizar_binarizada_frec,
-        bg="#3e3e42", fg="white", font=("Arial", 7), relief=tk.FLAT
-    ).pack(side=tk.LEFT, padx=1, expand=True, fill=tk.X)
-
-    tk.Button(
-        frame_btn_quemada, text="↺ Filtrada Normal",
-        command=restaurar_filtrada_frec,
-        bg="#333333", fg="#cccccc", font=("Arial", 7), relief=tk.FLAT
-    ).pack(side=tk.LEFT, padx=1, expand=True, fill=tk.X)
+    chk_frec_quemada.pack(anchor="w", pady=(0, 4))
 
     tk.Button(
         frame_post_frec, text="📄 Ver Matriz Quemada [-1, 8]",
         command=mostrar_matriz_quemada_popup,
-        bg="#2d2d30", fg="#4ec9b0", font=("Arial", 7), relief=tk.FLAT
+        bg="#2d2d30", fg="#4ec9b0", font=("Arial", 8, "bold"), relief=tk.FLAT
     ).pack(fill=tk.X, pady=(2, 0))
 
     # Paneles de la derecha para los 4 cuadrantes
@@ -1539,10 +1380,10 @@ def crear_interfaz():
     lbl_disp_frec_orig = tk.Label(frame_disp_c1, bg="#0d0d0d", text="Sin imagen cargada", fg="#555555")
     lbl_disp_frec_orig.pack(expand=True)
 
-    # --- CUADRANTE 2: Imagen con Ruido g(x,y) ---
+    # --- CUADRANTE 2: Imagen con Ruido I(x,y) ---
     c2 = tk.Frame(panel_der_frec, bg="#202020", padx=6, pady=4, bd=1, relief=tk.SOLID)
     c2.grid(row=0, column=1, padx=4, pady=4, sticky="nsew")
-    tk.Label(c2, text="2. Imagen con Ruido g(x,y)", bg="#202020", fg="#ffd700", font=("Arial", 10, "bold")).pack()
+    tk.Label(c2, text="2. Imagen con Ruido I(x,y)", bg="#202020", fg="#ffd700", font=("Arial", 10, "bold")).pack()
     lbl_info_frec_ruido = tk.Label(c2, text="Sin ruido", bg="#202020", fg="#ffd700", font=("Arial", 8))
     lbl_info_frec_ruido.pack(pady=(0, 2))
     frame_disp_c2 = tk.Frame(c2, bg="#0d0d0d", width=MAX_W_QUAD, height=MAX_H_QUAD)
@@ -1551,10 +1392,10 @@ def crear_interfaz():
     lbl_disp_frec_ruido = tk.Label(frame_disp_c2, bg="#0d0d0d", text="Sin imagen con ruido", fg="#555555")
     lbl_disp_frec_ruido.pack(expand=True)
 
-    # --- CUADRANTE 3: Espectro FFT 2D (con valores complejos e imaginarios) ---
+    # --- CUADRANTE 3: Espectro FFT 2D If(u,v) ---
     c3 = tk.Frame(panel_der_frec, bg="#202020", padx=6, pady=4, bd=1, relief=tk.SOLID)
     c3.grid(row=1, column=0, padx=4, pady=4, sticky="nsew")
-    tk.Label(c3, text="3. Espectro FFT 2D a partir de Imagen con Ruido", bg="#202020", fg="#4ec9b0", font=("Arial", 10, "bold")).pack()
+    tk.Label(c3, text="3. Espectro FFT 2D If(u,v)", bg="#202020", fg="#4ec9b0", font=("Arial", 10, "bold")).pack()
     lbl_info_frec_fft = tk.Label(c3, text="Mueve el ratón para inspeccionar frecuencia y componentes imaginarios", bg="#202020", fg="#4ec9b0", font=("Arial", 8))
     lbl_info_frec_fft.pack(pady=(0, 2))
     frame_disp_c3 = tk.Frame(c3, bg="#0d0d0d", width=MAX_W_QUAD, height=MAX_H_QUAD)
@@ -1570,7 +1411,7 @@ def crear_interfaz():
     canvas_disp_frec_fft.bind("<Motion>", on_hover_espectro_fft)
     canvas_disp_frec_fft.bind("<Leave>", on_leave_espectro_fft)
 
-    # --- CUADRANTE 4: Imagen Filtrada (IFFT) ---
+    # --- CUADRANTE 4: Imagen Filtrada (IFFT) / Con Acentuado [-1, 8] ---
     c4 = tk.Frame(panel_der_frec, bg="#202020", padx=6, pady=4, bd=1, relief=tk.SOLID)
     c4.grid(row=1, column=1, padx=4, pady=4, sticky="nsew")
     lbl_tit_frec_filtrada = tk.Label(c4, text="4. Imagen Filtrada en Frecuencia (IFFT)", bg="#202020", fg="#9cdcfe", font=("Arial", 10, "bold"))
