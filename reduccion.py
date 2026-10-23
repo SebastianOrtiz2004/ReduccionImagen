@@ -246,22 +246,6 @@ def aplicar_ruido_sal_pimienta(canal_r, canal_g, canal_b, filas, columnas, densi
 
 
 def aplicar_mascara_quemada(canal_r, canal_g, canal_b, filas, columnas, modo="enfasis", factor_a=1.0):
-\
-\
-\
-\
-\
-\
-\
-\
-\
-\
-\
-\
-\
-\
-\
-       
     canales_salida = []
 
     for matriz in (canal_r, canal_g, canal_b):

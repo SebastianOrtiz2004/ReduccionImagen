@@ -621,7 +621,7 @@ def actualizar_vista_cuadrante_4():
     else:
         r_out, g_out, b_out = r_frec_filtrado, g_frec_filtrado, b_frec_filtrado
         tipo_pasa_str = combo_tipo_pasa.get() if combo_tipo_pasa else "Pasa Bajos"
-        tipo_corto = "Pasa Bajos" if "Bajos" in tipo_pasa_str else "Pasa Altos"
+        tipo_corto = "Pasa Bajos Ideal" if "Bajos" in tipo_pasa_str else "Pasa Altos Ideal"
         d0_val = float(scale_d0.get()) if scale_d0 else 40.0
         titulo_txt = "4. Imagen Filtrada en Frecuencia (IFFT)"
         info_txt = f"{alto_orig}x{ancho_orig} px | {tipo_corto} | D₀={d0_val:.0f} px"
@@ -1306,13 +1306,14 @@ def crear_interfaz():
 
                                      
     tk.Label(panel_izq_frec, text="2. Tipo de Filtro en Frecuencia:", bg="#242424", fg="white", font=("Arial", 9, "bold")).pack(anchor="w", pady=(6, 2))
-    combo_tipo_pasa = tk.StringVar(value="Pasa Bajos (Low-Pass)")
+    combo_tipo_pasa = tk.StringVar(value="Pasa Bajos Ideal (Low-Pass)")
     menu_tipo_pasa = tk.OptionMenu(
         panel_izq_frec, combo_tipo_pasa,
-        "Pasa Bajos (Low-Pass)", "Pasa Altos (High-Pass)",
+        "Pasa Bajos Ideal (Low-Pass)", "Pasa Altos Ideal (High-Pass)",
         command=lambda _: ejecutar_filtro_frecuencia()
     )
-    menu_tipo_pasa.config(bg="#333333", fg="white", font=("Arial", 9), highlightthickness=0, width=22)
+    menu_tipo_pasa.config(bg="#333333", fg="white", font=("Arial", 9), highlightthickness=0, width=25)
+    menu_tipo_pasa.pack(anchor="w")
                                           
     tk.Label(panel_izq_frec, text="3. Frecuencia de Corte D₀ (Radio px):", bg="#242424", fg="white", font=("Arial", 9, "bold")).pack(anchor="w", pady=(6, 2))
     frame_d0 = tk.Frame(panel_izq_frec, bg="#242424")
