@@ -189,17 +189,7 @@ def calcular_matriz_gaussiana(tam):
     return matriz_norm
 
 
-def procesar_imagen_rgb(canal_r, canal_g, canal_b, filas, columnas, mascara, tam_f, tam_c, tipo_filtro, salto_f, salto_c, usar_pad):
-    r_res, n_filas, n_cols = procesar_canal(canal_r, filas, columnas, mascara, tam_f, tam_c, tipo_filtro, salto_f, salto_c, usar_pad)
-    g_res, _, _ = procesar_canal(canal_g, filas, columnas, mascara, tam_f, tam_c, tipo_filtro, salto_f, salto_c, usar_pad)
-    b_res, _, _ = procesar_canal(canal_b, filas, columnas, mascara, tam_f, tam_c, tipo_filtro, salto_f, salto_c, usar_pad)
-    return r_res, g_res, b_res, n_filas, n_cols
-
-
 def aplicar_ruido_sal_pimienta(canal_r, canal_g, canal_b, filas, columnas, densidad=0.05):
-    """
-    Aplica ruido impulsivo de Sal y Pimienta sobre una imagen RGB matricial.
-    """
     try:
         densidad = float(densidad)
     except (ValueError, TypeError):
@@ -255,20 +245,23 @@ def aplicar_ruido_sal_pimienta(canal_r, canal_g, canal_b, filas, columnas, densi
     return nuevo_r, nuevo_g, nuevo_b
 
 
-imnoise = aplicar_ruido_sal_pimienta
-
-
-def aplicar_mascara_quemada(canal_r, canal_g, canal_b, filas, columnas):
-    """
-    Aplica directamente por convolución espacial la máscara pasa-altos de acentuado 3x3
-    quemada en código:
-        [[-1, -1, -1],
-         [-1,  8, -1],
-         [-1, -1, -1]]
-    sobre los canales RGB de la imagen obtenida tras la IFFT.
-    La suma de los pesos es 0, por lo que las regiones homogéneas resultan en 0 y se
-    acentúan únicamente los cambios de intensidad (orillas/bordes).
-    """
+def aplicar_mascara_quemada(canal_r, canal_g, canal_b, filas, columnas, modo="enfasis", factor_a=1.0):
+\
+\
+\
+\
+\
+\
+\
+\
+\
+\
+\
+\
+\
+\
+\
+       
     canales_salida = []
 
     for matriz in (canal_r, canal_g, canal_b):
@@ -284,7 +277,15 @@ def aplicar_mascara_quemada(canal_r, canal_g, canal_b, filas, columnas):
                         peso = MASCARA_QUEMADA_3X3[i][j]
                         acumulador += pixel * peso
 
-                salida_canal[f][c] = formato_uint8(abs(acumulador))
+                if modo == "laplaciano":
+                    nuevo_val = abs(acumulador)
+                else:
+                                                                                                           
+                    detalle_alta_frec = acumulador / 8.0
+                    pixel_ifft = matriz[f][c]
+                    nuevo_val = pixel_ifft + (float(factor_a) * detalle_alta_frec)
+
+                salida_canal[f][c] = formato_uint8(nuevo_val)
 
         canales_salida.append(salida_canal)
 
@@ -292,10 +293,6 @@ def aplicar_mascara_quemada(canal_r, canal_g, canal_b, filas, columnas):
 
 
 def calcular_fft2_imagen(canal_r, canal_g, canal_b, filas, columnas):
-    """
-    Calcula la Transformada Rápida de Fourier 2D (FFT2) centrada (fftshift)
-    para cada canal RGB y para la luminancia.
-    """
     arr_r = np.array(canal_r, dtype=np.float64)
     arr_g = np.array(canal_g, dtype=np.float64)
     arr_b = np.array(canal_b, dtype=np.float64)
@@ -311,9 +308,6 @@ def calcular_fft2_imagen(canal_r, canal_g, canal_b, filas, columnas):
 
 
 def generar_espectro_visual(F_complejo, modo="magnitud"):
-    """
-    Genera una matriz uint8 [0, 255] visualizable a partir de la matriz FFT compleja.
-    """
     modo = modo.lower()
     if "real" in modo:
         datos = np.real(F_complejo)
@@ -336,28 +330,21 @@ def generar_espectro_visual(F_complejo, modo="magnitud"):
     return norm
 
 
-def generar_mascara_filtro(filas, columnas, tipo_pasa="bajos", modelo="gaussiano", d0=40.0, orden=2):
-    """
-    Construye la función de transferencia H(u, v) del mismo tamaño de la imagen.
-    En Pasa-Altos se niega el filtro Pasa-Bajos: H_PA(u, v) = 1.0 - H_PB(u, v).
-    """
+def generar_mascara_filtro(filas, columnas, tipo_pasa="bajos", d0=40.0, **kwargs):
+\
+\
+\
+\
+       
     d0 = max(0.5, float(d0))
     u = np.arange(filas) - (filas // 2)
     v = np.arange(columnas) - (columnas // 2)
     U, V = np.meshgrid(u, v, indexing="ij")
     D = np.sqrt(U**2 + V**2)
 
-    mod = modelo.lower()
-    if "ideal" in mod:
-        H_lp = (D <= d0).astype(np.float64)
-    elif "butter" in mod:
-        orden = max(1, int(orden))
-        with np.errstate(divide="ignore", invalid="ignore"):
-            H_lp = 1.0 / (1.0 + (D / d0)**(2 * orden))
-    else:
-        H_lp = np.exp(-(D**2) / (2.0 * (d0**2)))
+    H_lp = (D <= d0).astype(np.float64)
 
-    if "alto" in tipo_pasa.lower():
+    if "alto" in str(tipo_pasa).lower():
         H = 1.0 - H_lp
     else:
         H = H_lp
@@ -365,11 +352,8 @@ def generar_mascara_filtro(filas, columnas, tipo_pasa="bajos", modelo="gaussiano
     return H
 
 
-def filtrar_frecuencia_rgb(canal_r, canal_g, canal_b, filas, columnas, tipo_pasa="bajos", modelo="gaussiano", d0=40.0, orden=2):
-    """
-    Multiplica punto a punto If(u, v) * H(u, v) y aplica la Transformada Inversa (IFFT2).
-    """
-    H = generar_mascara_filtro(filas, columnas, tipo_pasa, modelo, d0, orden)
+def filtrar_frecuencia_rgb(canal_r, canal_g, canal_b, filas, columnas, tipo_pasa="bajos", d0=40.0, **kwargs):
+    H = generar_mascara_filtro(filas, columnas, tipo_pasa, d0=d0)
 
     canales_out = []
     for ch in [canal_r, canal_g, canal_b]:
@@ -381,8 +365,3 @@ def filtrar_frecuencia_rgb(canal_r, canal_g, canal_b, filas, columnas, tipo_pasa
         canales_out.append([bytearray(fila) for fila in g_uint8])
 
     return canales_out[0], canales_out[1], canales_out[2], H
-
-
-if __name__ == "__main__":
-    from interfaz import iniciar_interfaz
-    iniciar_interfaz()

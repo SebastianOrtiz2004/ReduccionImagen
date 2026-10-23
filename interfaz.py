@@ -34,11 +34,11 @@ densidad_ruido_actual = 0.0
 entrada_ruido = None
 entrada_ruido_frec = None
 
-# Variable para Pestaña 2: Aplicar Máscara de Acentuado [-1, 8] sobre la salida IFFT
 var_frec_quemada = None
+var_modo_acentuado = None
+scale_factor_a = None
 lbl_tit_frec_filtrada = None
 
-# Variables para Pestaña 2: Filtrado en Frecuencia (FFT 2D)
 F_r_actual = None
 F_g_actual = None
 F_b_actual = None
@@ -62,7 +62,6 @@ combo_tipo_pasa = None
 combo_modelo_filtro = None
 scale_d0 = None
 entry_d0 = None
-entry_orden = None
 combo_modo_espectro = None
 
 lbl_info_frec_orig = None
@@ -215,7 +214,7 @@ def actualizar_render_zoom():
         if abs(zoom_factor - 1.0) < 0.01:
             lbl_info_resultado_dim.config(text=f"{n_filas} x {n_cols} px  (1.0× Tamaño Reducido)")
         else:
-            lbl_info_resultado_dim.config(text=f"{n_filas} x {n_cols} px  |  🔍 Zoom {zoom_factor:.2f}×")
+            lbl_info_resultado_dim.config(text=f"{n_filas} x {n_cols} px  |  Zoom {zoom_factor:.2f}×")
 
 
 def aplicar_delta_zoom(delta_factor, center_x=None, center_y=None):
@@ -473,10 +472,10 @@ def actualizar_inspector_fft(f, c):
     fase_deg = float(np.angle(coef, deg=True))
 
     es_dc = (u == 0 and v == 0)
-    str_dc = "  [Centro DC]" if es_dc else ""
+    str_dc = " [DC]" if es_dc else ""
 
     if lbl_insp_uv and lbl_insp_uv.winfo_exists():
-        lbl_insp_uv.config(text=f"Frecuencia (u, v): ({u:+d}, {v:+d}){str_dc}")
+        lbl_insp_uv.config(text=f"Frecuencia (u, v): ({u:+d}, {v:+d})  {str_dc}")
     if lbl_insp_radio and lbl_insp_radio.winfo_exists():
         lbl_insp_radio.config(text=f"Radio D(u, v): {dist:.2f} px")
     if lbl_insp_real and lbl_insp_real.winfo_exists():
@@ -525,10 +524,8 @@ def actualizar_render_espectro_fft():
             arr_visual = (H_actual * 255.0).astype(np.uint8)
         else:
             d0_val = float(scale_d0.get()) if scale_d0 else 40.0
-            ord_val = int(entry_orden.get()) if entry_orden else 2
             tipo_val = "bajos" if (combo_tipo_pasa and "Bajos" in combo_tipo_pasa.get()) else "altos"
-            mod_val = combo_modelo_filtro.get().lower() if combo_modelo_filtro else "gaussiano"
-            arr_visual = (generar_mascara_filtro(alto_orig, ancho_orig, tipo_val, mod_val, d0_val, ord_val) * 255.0).astype(np.uint8)
+            arr_visual = (generar_mascara_filtro(alto_orig, ancho_orig, tipo_val, d0=d0_val) * 255.0).astype(np.uint8)
         if lbl_info_frec_fft and lbl_info_frec_fft.winfo_exists():
             lbl_info_frec_fft.config(text=f"Máscara Filtro H(u,v) | {alto_orig} x {ancho_orig} px")
     elif "Real" in modo:
@@ -573,9 +570,6 @@ def ejecutar_filtro_frecuencia():
     tipo_pasa_str = combo_tipo_pasa.get() if combo_tipo_pasa else "Pasa Bajos"
     tipo_pasa = "bajos" if "Bajos" in tipo_pasa_str else "altos"
 
-    modelo_str = combo_modelo_filtro.get() if combo_modelo_filtro else "Gaussiano"
-    modelo = modelo_str.lower()
-
     try:
         d0 = float(scale_d0.get()) if scale_d0 else 40.0
         if d0 <= 0:
@@ -583,16 +577,9 @@ def ejecutar_filtro_frecuencia():
     except ValueError:
         d0 = 40.0
 
-    try:
-        orden = int(entry_orden.get()) if entry_orden else 2
-        if orden < 1:
-            orden = 2
-    except ValueError:
-        orden = 2
-
     r_filt, g_filt, b_filt, H = filtrar_frecuencia_rgb(
         canal_rojo, canal_verde, canal_azul, alto_orig, ancho_orig,
-        tipo_pasa=tipo_pasa, modelo=modelo, d0=d0, orden=orden
+        tipo_pasa=tipo_pasa, d0=d0
     )
 
     r_frec_filtrado = r_filt
@@ -613,25 +600,31 @@ def actualizar_vista_cuadrante_4():
         return
 
     if var_frec_quemada is not None and var_frec_quemada.get():
-        # Aplicar únicamente la máscara de acentuado [-1, 8, -1] sobre la imagen IFFT
+        modo_actual = var_modo_acentuado.get() if var_modo_acentuado else "enfasis"
+        try:
+            factor_a = float(scale_factor_a.get()) if scale_factor_a else 1.0
+        except Exception:
+            factor_a = 1.0
+
         r_out, g_out, b_out, _, _ = aplicar_mascara_quemada(
             r_frec_filtrado, g_frec_filtrado, b_frec_filtrado,
-            alto_orig, ancho_orig
+            alto_orig, ancho_orig,
+            modo=modo_actual, factor_a=factor_a
         )
-        titulo_txt = "4. Imagen IFFT + Filtro Acentuado [-1, 8]"
-        info_txt = f"{alto_orig}x{ancho_orig} px | Convolución directa con máscara quemada [-1, 8] (Suma de pesos = 0)"
+
+        if modo_actual == "enfasis":
+            titulo_txt = "4. Imagen IFFT + Énfasis de Altas Frecuencias (EA)"
+            info_txt = f"{alto_orig}x{ancho_orig} px | EA = IFFT + {factor_a:.1f}·(PA/8) | Color e iluminación intactos + Bordes enfocados"
+        else:
+            titulo_txt = "4. Imagen IFFT + Pasa-Altos Puro [-1, 8] (PA)"
+            info_txt = f"{alto_orig}x{ancho_orig} px | Convolución directa con máscara [-1, 8] (Suma = 0, orillas sobre negro)"
     else:
-        # Imagen filtrada IFFT normal
         r_out, g_out, b_out = r_frec_filtrado, g_frec_filtrado, b_frec_filtrado
         tipo_pasa_str = combo_tipo_pasa.get() if combo_tipo_pasa else "Pasa Bajos"
         tipo_corto = "Pasa Bajos" if "Bajos" in tipo_pasa_str else "Pasa Altos"
-        modelo_str = combo_modelo_filtro.get() if combo_modelo_filtro else "Gaussiano"
         d0_val = float(scale_d0.get()) if scale_d0 else 40.0
-        ord_val = int(entry_orden.get()) if entry_orden else 2
         titulo_txt = "4. Imagen Filtrada en Frecuencia (IFFT)"
-        info_txt = f"{alto_orig}x{ancho_orig} px | {tipo_corto} ({modelo_str}) | D₀={d0_val:.0f} px"
-        if "Butter" in modelo_str:
-            info_txt += f" | n={ord_val}"
+        info_txt = f"{alto_orig}x{ancho_orig} px | {tipo_corto} | D₀={d0_val:.0f} px"
 
     if lbl_disp_frec_filtrada and lbl_disp_frec_filtrada.winfo_exists():
         foto_frec_filtrada_tk, _, _ = generar_foto_preview_rgb(
@@ -648,31 +641,63 @@ def actualizar_vista_cuadrante_4():
 
 def mostrar_matriz_quemada_popup():
     popup = tk.Toplevel(ventana)
-    popup.title("Detalles de la Máscara de Acentuado [-1, 8]")
-    popup.geometry("500x330")
+    popup.title("Detalles del Filtro de Acentuado")
+    popup.geometry("540x440")
     popup.configure(bg="#1a1a1a")
     popup.resizable(False, False)
 
-    tk.Label(popup, text="Filtro Pasa-Altos de Acentuado 3x3 (Quemado en Código)", bg="#1a1a1a", fg="#ffd700", font=("Arial", 11, "bold")).pack(pady=(12, 4))
-    tk.Label(
-        popup,
-        text="Se aplica directamente por convolución sobre la imagen salida de la IFFT:",
-        bg="#1a1a1a", fg="#cccccc", font=("Arial", 9), justify="center"
-    ).pack(pady=(0, 6))
+    modo_actual = var_modo_acentuado.get() if var_modo_acentuado else "enfasis"
+    try:
+        factor_a = float(scale_factor_a.get()) if scale_factor_a else 1.0
+    except Exception:
+        factor_a = 1.0
 
-    frame_box = tk.Frame(popup, bg="#0d0d0d", padx=10, pady=8)
-    frame_box.pack(padx=20, pady=4)
+    if modo_actual == "enfasis":
+        w_centro = 9.0 * factor_a - 1.0
+        suma_pesos = w_centro - 8.0
 
-    caja = tk.Text(frame_box, bg="#0d0d0d", fg="#4ec9b0", font=("Consolas", 12, "bold"), width=24, height=4, bd=0)
-    caja.pack()
-    caja.insert(tk.END, "  [ -1   -1   -1 ]\n  [ -1    8   -1 ]\n  [ -1   -1   -1 ]\n")
-    caja.config(state=tk.DISABLED)
+        tk.Label(popup, text="Énfasis de Altas Frecuencias (High-Boost)", bg="#1a1a1a", fg="#4ec9b0", font=("Arial", 11, "bold")).pack(pady=(12, 2))
+        tk.Label(popup, text="Diapositivas 16 a 18: EA = Imagen_IFFT + A · (PA / 8)", bg="#1a1a1a", fg="#ffd700", font=("Arial", 9, "bold")).pack()
+        tk.Label(
+            popup,
+            text=f"Equivalente a una máscara espacial con celda central w = 9A - 1:\n(Para A = {factor_a:.2f} ⟹ Centro = {w_centro:.2f}, Suma de pesos = {suma_pesos:.2f})",
+            bg="#1a1a1a", fg="#cccccc", font=("Arial", 9), justify="center"
+        ).pack(pady=(2, 6))
 
-    tk.Label(
-        popup,
-        text="Suma de pesos = 0.\nLas regiones de intensidad constante dan 0 y se acentúan las orillas.",
-        bg="#1a1a1a", fg="#9cdcfe", font=("Arial", 8, "italic"), justify="center"
-    ).pack(pady=(6, 10))
+        frame_box = tk.Frame(popup, bg="#0d0d0d", padx=10, pady=8)
+        frame_box.pack(padx=20, pady=4)
+        caja = tk.Text(frame_box, bg="#0d0d0d", fg="#4ec9b0", font=("Consolas", 11, "bold"), width=32, height=4, bd=0)
+        caja.pack()
+        caja.insert(tk.END, f"  [   -1.00     -1.00    -1.00   ]\n  [   -1.00    {w_centro:6.2f}    -1.00   ]\n  [   -1.00     -1.00    -1.00   ]\n")
+        caja.config(state=tk.DISABLED)
+
+        tk.Label(
+            popup,
+            text="✓ A diferencia del pasa-altos puro que anula las bajas frecuencias dejando el fondo negro,\n"
+                 "el énfasis de altas frecuencias conserva la iluminación y colores originales de la IFFT,\n"
+                 "restituyendo la nitidez y el enfoque de las orillas (Diapositivas 19c y 19f).",
+            bg="#1a1a1a", fg="#9cdcfe", font=("Arial", 8, "italic"), justify="center"
+        ).pack(pady=(6, 8))
+    else:
+        tk.Label(popup, text="Filtro Pasa-Altos Puro [-1, 8] (Diapositiva 14)", bg="#1a1a1a", fg="#ffd700", font=("Arial", 11, "bold")).pack(pady=(12, 4))
+        tk.Label(
+            popup,
+            text="Convolución directa con máscara pasa-altos derivativa 3x3:",
+            bg="#1a1a1a", fg="#cccccc", font=("Arial", 9), justify="center"
+        ).pack(pady=(0, 6))
+
+        frame_box = tk.Frame(popup, bg="#0d0d0d", padx=10, pady=8)
+        frame_box.pack(padx=20, pady=4)
+        caja = tk.Text(frame_box, bg="#0d0d0d", fg="#4ec9b0", font=("Consolas", 12, "bold"), width=24, height=4, bd=0)
+        caja.pack()
+        caja.insert(tk.END, "  [ -1   -1   -1 ]\n  [ -1    8   -1 ]\n  [ -1   -1   -1 ]\n")
+        caja.config(state=tk.DISABLED)
+
+        tk.Label(
+            popup,
+            text="Suma de pesos = 0.\nLas regiones de intensidad constante dan 0 (fondo negro) y solo se aprecian las orillas.",
+            bg="#1a1a1a", fg="#9cdcfe", font=("Arial", 8, "italic"), justify="center"
+        ).pack(pady=(6, 10))
 
     tk.Button(popup, text="Cerrar", command=popup.destroy, bg="#333333", fg="white", font=("Arial", 9, "bold"), width=12, relief=tk.FLAT).pack(pady=(0, 10))
 
@@ -984,10 +1009,9 @@ def crear_interfaz():
     global lbl_img_resultado, lbl_info_resultado_dim, lbl_info_resultado_mascara, lbl_info_resultado_detalles, btn_ver_mascara
     global canvas_resultado, lbl_zoom_val, entrada_ruido
 
-    # Variables de la pestaña 2 (Frecuencia)
     global lbl_frec_info_dim, entrada_ruido_frec, combo_tipo_pasa, combo_modelo_filtro
-    global scale_d0, entry_d0, entry_orden, combo_modo_espectro
-    global var_frec_quemada, lbl_tit_frec_filtrada
+    global scale_d0, entry_d0, combo_modo_espectro
+    global var_frec_quemada, var_modo_acentuado, scale_factor_a, lbl_tit_frec_filtrada
     global lbl_info_frec_orig, lbl_disp_frec_orig
     global lbl_info_frec_ruido, lbl_disp_frec_ruido
     global lbl_info_frec_fft, canvas_disp_frec_fft
@@ -1028,9 +1052,7 @@ def crear_interfaz():
     notebook.add(tab_espacial, text="  1. Reducción y Convolución Espacial  ")
     notebook.add(tab_frecuencia, text="  2. Filtrado en Frecuencia (FFT 2D)  ")
 
-    # =========================================================================
-    # PESTAÑA 1: CONVOLUCIÓN ESPACIAL Y REDUCCIÓN POR SALTO
-    # =========================================================================
+                                                                               
     panel_izq = tk.Frame(tab_espacial, bg="#242424", padx=14, pady=12, width=320)
     panel_izq.pack(side=tk.LEFT, fill=tk.Y)
 
@@ -1205,13 +1227,54 @@ def crear_interfaz():
 
     cargar_preset_gaussiana_clase()
 
-    # =========================================================================
-    # PESTAÑA 2: FILTRADO EN FRECUENCIA (FFT 2D) - 4 CUADRANTES
-    # =========================================================================
-    panel_izq_frec = tk.Frame(tab_frecuencia, bg="#242424", padx=14, pady=10, width=320)
-    panel_izq_frec.pack(side=tk.LEFT, fill=tk.Y)
+                                                                               
+    container_izq_frec = tk.Frame(tab_frecuencia, bg="#242424", width=335)
+    container_izq_frec.pack(side=tk.LEFT, fill=tk.Y)
+    container_izq_frec.pack_propagate(False)
 
-    # 1. Cargar imagen y Ruido en Pestaña 2
+    canvas_scroll_frec = tk.Canvas(container_izq_frec, bg="#242424", highlightthickness=0)
+    scrollbar_frec = ttk.Scrollbar(container_izq_frec, orient="vertical", command=canvas_scroll_frec.yview)
+
+    panel_izq_frec = tk.Frame(canvas_scroll_frec, bg="#242424", padx=8, pady=4)
+    win_frec_id = canvas_scroll_frec.create_window((0, 0), window=panel_izq_frec, anchor="nw")
+
+    def _on_panel_config(event=None):
+        canvas_scroll_frec.update_idletasks()
+        canvas_scroll_frec.configure(scrollregion=canvas_scroll_frec.bbox("all"))
+
+    panel_izq_frec.bind("<Configure>", _on_panel_config)
+
+    def _on_canvas_config(event):
+        canvas_scroll_frec.itemconfig(win_frec_id, width=event.width)
+
+    canvas_scroll_frec.bind("<Configure>", _on_canvas_config)
+    canvas_scroll_frec.configure(yscrollcommand=scrollbar_frec.set)
+
+    scrollbar_frec.pack(side=tk.RIGHT, fill=tk.Y)
+    canvas_scroll_frec.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+
+    def _on_mousewheel_panel(event):
+        if event.delta:
+            canvas_scroll_frec.yview_scroll(int(-1 * (event.delta / 120)), "units")
+        elif event.num == 4:
+            canvas_scroll_frec.yview_scroll(-1, "units")
+        elif event.num == 5:
+            canvas_scroll_frec.yview_scroll(1, "units")
+
+    def _bind_mousewheel(event=None):
+        canvas_scroll_frec.bind_all("<MouseWheel>", _on_mousewheel_panel)
+        canvas_scroll_frec.bind_all("<Button-4>", _on_mousewheel_panel)
+        canvas_scroll_frec.bind_all("<Button-5>", _on_mousewheel_panel)
+
+    def _unbind_mousewheel(event=None):
+        canvas_scroll_frec.unbind_all("<MouseWheel>")
+        canvas_scroll_frec.unbind_all("<Button-4>")
+        canvas_scroll_frec.unbind_all("<Button-5>")
+
+    container_izq_frec.bind("<Enter>", _bind_mousewheel)
+    container_izq_frec.bind("<Leave>", _unbind_mousewheel)
+
+                              
     frame_carga_frec = tk.Frame(panel_izq_frec, bg="#242424")
     frame_carga_frec.pack(fill=tk.X, pady=(0, 4))
 
@@ -1241,7 +1304,7 @@ def crear_interfaz():
     lbl_frec_info_dim = tk.Label(frame_carga_frec, text="Esperando imagen...", bg="#242424", fg="#888888", font=("Arial", 8))
     lbl_frec_info_dim.pack(pady=(2, 0))
 
-    # 2. Configuración del Filtro FFT
+                                     
     tk.Label(panel_izq_frec, text="2. Tipo de Filtro en Frecuencia:", bg="#242424", fg="white", font=("Arial", 9, "bold")).pack(anchor="w", pady=(6, 2))
     combo_tipo_pasa = tk.StringVar(value="Pasa Bajos (Low-Pass)")
     menu_tipo_pasa = tk.OptionMenu(
@@ -1250,19 +1313,8 @@ def crear_interfaz():
         command=lambda _: ejecutar_filtro_frecuencia()
     )
     menu_tipo_pasa.config(bg="#333333", fg="white", font=("Arial", 9), highlightthickness=0, width=22)
-    menu_tipo_pasa.pack(anchor="w")
-
-    tk.Label(panel_izq_frec, text="3. Modelo Matemático H(u, v):", bg="#242424", fg="white", font=("Arial", 9, "bold")).pack(anchor="w", pady=(6, 2))
-    combo_modelo_filtro = tk.StringVar(value="Gaussiano")
-    menu_modelo = tk.OptionMenu(
-        panel_izq_frec, combo_modelo_filtro,
-        "Gaussiano", "Butterworth", "Ideal",
-        command=lambda _: ejecutar_filtro_frecuencia()
-    )
-    menu_modelo.config(bg="#333333", fg="white", font=("Arial", 9), highlightthickness=0, width=22)
-    menu_modelo.pack(anchor="w")
-
-    tk.Label(panel_izq_frec, text="4. Frecuencia de Corte D₀ (Radio px):", bg="#242424", fg="white", font=("Arial", 9, "bold")).pack(anchor="w", pady=(6, 2))
+                                          
+    tk.Label(panel_izq_frec, text="3. Frecuencia de Corte D₀ (Radio px):", bg="#242424", fg="white", font=("Arial", 9, "bold")).pack(anchor="w", pady=(6, 2))
     frame_d0 = tk.Frame(panel_izq_frec, bg="#242424")
     frame_d0.pack(fill=tk.X, pady=(0, 2))
 
@@ -1280,21 +1332,13 @@ def crear_interfaz():
     entry_d0.pack(side=tk.LEFT, padx=(6, 0))
     entry_d0.bind("<Return>", lambda e: [on_entry_d0_change(), ejecutar_filtro_frecuencia()])
 
-    frame_orden = tk.Frame(panel_izq_frec, bg="#242424")
-    frame_orden.pack(fill=tk.X, pady=(2, 4))
-    tk.Label(frame_orden, text="Orden n (Butterworth):", bg="#242424", fg="lightgray", font=("Arial", 8)).pack(side=tk.LEFT)
-    entry_orden = tk.Entry(frame_orden, width=4, justify="center", font=("Arial", 8))
-    entry_orden.insert(0, "2")
-    entry_orden.pack(side=tk.LEFT, padx=(4, 0))
-    entry_orden.bind("<Return>", lambda e: ejecutar_filtro_frecuencia())
-
     tk.Button(
         panel_izq_frec, text="⚡ Aplicar Filtro FFT", command=ejecutar_filtro_frecuencia,
         bg="#107c41", fg="white", font=("Arial", 10, "bold"), width=25, relief=tk.FLAT
-    ).pack(pady=(4, 6))
+    ).pack(pady=(6, 6))
 
-    # 3. Inspector de Frecuencias y Números Complejos F(u, v)
-    tk.Label(panel_izq_frec, text="5. Inspector FFT F(u, v) Complejo:", bg="#242424", fg="#4ec9b0", font=("Arial", 9, "bold")).pack(anchor="w", pady=(3, 2))
+                                 
+    tk.Label(panel_izq_frec, text="4. Inspector FFT F(u, v) Complejo:", bg="#242424", fg="#4ec9b0", font=("Arial", 9, "bold")).pack(anchor="w", pady=(3, 2))
 
     frame_insp = tk.Frame(panel_izq_frec, bg="#111111", padx=8, pady=5, bd=1, relief=tk.SOLID)
     frame_insp.pack(fill=tk.X, pady=(0, 6))
@@ -1308,20 +1352,20 @@ def crear_interfaz():
     lbl_insp_radio = tk.Label(frame_insp, text="Radio D(u, v): 0.00 px", bg="#111111", fg="#cccccc", font=("Consolas", 8))
     lbl_insp_radio.pack(anchor="w")
 
-    lbl_insp_real = tk.Label(frame_insp, text="Parte Real Re: +0.0000e+00", bg="#111111", fg="#4ec9b0", font=("Consolas", 8))
+    lbl_insp_real = tk.Label(frame_insp, text="Parte Real: +0.000e+00", bg="#111111", fg="#4ec9b0", font=("Consolas", 8))
     lbl_insp_real.pack(anchor="w")
 
-    lbl_insp_imag = tk.Label(frame_insp, text="Parte Imag Im: +0.0000e+00 j", bg="#111111", fg="#ce9178", font=("Consolas", 8, "bold"))
+    lbl_insp_imag = tk.Label(frame_insp, text="Parte Imag: +0.000e+00 j", bg="#111111", fg="#ce9178", font=("Consolas", 8, "bold"))
     lbl_insp_imag.pack(anchor="w")
 
-    lbl_insp_mag = tk.Label(frame_insp, text="Magnitud |F|: 0.0000e+00", bg="#111111", fg="#9cdcfe", font=("Consolas", 8))
+    lbl_insp_mag = tk.Label(frame_insp, text="Magnitud |F|: 0.000e+00", bg="#111111", fg="#9cdcfe", font=("Consolas", 8))
     lbl_insp_mag.pack(anchor="w")
 
-    lbl_insp_fase = tk.Label(frame_insp, text="Fase φ(u, v): 0.0°", bg="#111111", fg="#dcdcaa", font=("Consolas", 8))
+    lbl_insp_fase = tk.Label(frame_insp, text="Fase φ: +0.0°", bg="#111111", fg="#dcdcaa", font=("Consolas", 8))
     lbl_insp_fase.pack(anchor="w")
 
-    # 4. Modo de Visualización del Espectro
-    tk.Label(panel_izq_frec, text="6. Modo Visual del Espectro:", bg="#242424", fg="white", font=("Arial", 8, "bold")).pack(anchor="w", pady=(2, 1))
+                                           
+    tk.Label(panel_izq_frec, text="5. Modo Visual del Espectro:", bg="#242424", fg="white", font=("Arial", 8, "bold")).pack(anchor="w", pady=(2, 1))
     combo_modo_espectro = tk.StringVar(value="Magnitud Logarítmica log(1+|F|)")
     combo_modo_espectro.trace_add("write", on_cambio_modo_espectro)
     menu_modo = tk.OptionMenu(
@@ -1335,32 +1379,62 @@ def crear_interfaz():
     menu_modo.config(bg="#333333", fg="white", font=("Arial", 8), highlightthickness=0, width=24)
     menu_modo.pack(anchor="w")
 
-    # 5. Aplicación directa del Filtro de Acentuado [-1, 8, -1] quemado en código
+                                       
     frame_post_frec = tk.LabelFrame(
         panel_izq_frec,
-        text="7. Filtro de Acentuado [-1, 8] sobre IFFT:",
+        text="6. Filtro de Acentuado sobre IFFT:",
         bg="#242424", fg="#ffd700", font=("Arial", 8, "bold"),
-        padx=6, pady=6
+        padx=6, pady=5
     )
-    frame_post_frec.pack(fill=tk.X, pady=(8, 2))
+    frame_post_frec.pack(fill=tk.X, pady=(6, 2))
 
     var_frec_quemada = tk.BooleanVar(value=False)
     chk_frec_quemada = tk.Checkbutton(
         frame_post_frec,
-        text="Aplicar Máscara Quemada [-1, 8]",
+        text="Aplicar Filtro de Acentuado",
         variable=var_frec_quemada,
         command=actualizar_vista_cuadrante_4,
         bg="#242424", fg="white", selectcolor="#111111", font=("Arial", 8, "bold")
     )
-    chk_frec_quemada.pack(anchor="w", pady=(0, 4))
+    chk_frec_quemada.pack(anchor="w", pady=(0, 2))
+
+    var_modo_acentuado = tk.StringVar(value="enfasis")
+    frame_radios_modo = tk.Frame(frame_post_frec, bg="#242424")
+    frame_radios_modo.pack(fill=tk.X, pady=(1, 2))
+
+    rb_enfasis = tk.Radiobutton(
+        frame_radios_modo, text="Énfasis (IFFT + PA)", variable=var_modo_acentuado,
+        value="enfasis", command=actualizar_vista_cuadrante_4,
+        bg="#242424", fg="#4ec9b0", selectcolor="#111111", font=("Arial", 8, "bold")
+    )
+    rb_enfasis.pack(anchor="w")
+
+    rb_laplaciano = tk.Radiobutton(
+        frame_radios_modo, text="Solo Bordes (PA puro)", variable=var_modo_acentuado,
+        value="laplaciano", command=actualizar_vista_cuadrante_4,
+        bg="#242424", fg="#cccccc", selectcolor="#111111", font=("Arial", 8)
+    )
+    rb_laplaciano.pack(anchor="w")
+
+    frame_slider_a = tk.Frame(frame_post_frec, bg="#242424")
+    frame_slider_a.pack(fill=tk.X, pady=(1, 2))
+    tk.Label(frame_slider_a, text="Ganancia A:", bg="#242424", fg="lightgray", font=("Arial", 8)).pack(side=tk.LEFT)
+    scale_factor_a = tk.Scale(
+        frame_slider_a, from_=0.2, to=2.0, resolution=0.1, orient=tk.HORIZONTAL,
+        bg="#242424", fg="white", highlightthickness=0, troughcolor="#111111",
+        activebackground="#0078d4", length=110
+    )
+    scale_factor_a.set(1.0)
+    scale_factor_a.pack(side=tk.RIGHT, fill=tk.X, expand=True)
+    scale_factor_a.bind("<ButtonRelease-1>", lambda _: actualizar_vista_cuadrante_4())
 
     tk.Button(
-        frame_post_frec, text="📄 Ver Matriz Quemada [-1, 8]",
+        frame_post_frec, text="📄 Ver Matriz / Fórmula 9A-1",
         command=mostrar_matriz_quemada_popup,
         bg="#2d2d30", fg="#4ec9b0", font=("Arial", 8, "bold"), relief=tk.FLAT
-    ).pack(fill=tk.X, pady=(2, 0))
+    ).pack(fill=tk.X, pady=(3, 0))
 
-    # Paneles de la derecha para los 4 cuadrantes
+                                                 
     panel_der_frec = tk.Frame(tab_frecuencia, bg="#181818", padx=8, pady=6)
     panel_der_frec.pack(side=tk.RIGHT, fill=tk.BOTH, expand=True)
     panel_der_frec.columnconfigure(0, weight=1)
@@ -1368,7 +1442,7 @@ def crear_interfaz():
     panel_der_frec.rowconfigure(0, weight=1)
     panel_der_frec.rowconfigure(1, weight=1)
 
-    # --- CUADRANTE 1: Imagen Original f(x,y) ---
+                                                 
     c1 = tk.Frame(panel_der_frec, bg="#202020", padx=6, pady=4, bd=1, relief=tk.SOLID)
     c1.grid(row=0, column=0, padx=4, pady=4, sticky="nsew")
     tk.Label(c1, text="1. Imagen Original f(x,y)", bg="#202020", fg="white", font=("Arial", 10, "bold")).pack()
@@ -1380,7 +1454,7 @@ def crear_interfaz():
     lbl_disp_frec_orig = tk.Label(frame_disp_c1, bg="#0d0d0d", text="Sin imagen cargada", fg="#555555")
     lbl_disp_frec_orig.pack(expand=True)
 
-    # --- CUADRANTE 2: Imagen con Ruido I(x,y) ---
+                                                  
     c2 = tk.Frame(panel_der_frec, bg="#202020", padx=6, pady=4, bd=1, relief=tk.SOLID)
     c2.grid(row=0, column=1, padx=4, pady=4, sticky="nsew")
     tk.Label(c2, text="2. Imagen con Ruido I(x,y)", bg="#202020", fg="#ffd700", font=("Arial", 10, "bold")).pack()
@@ -1392,7 +1466,7 @@ def crear_interfaz():
     lbl_disp_frec_ruido = tk.Label(frame_disp_c2, bg="#0d0d0d", text="Sin imagen con ruido", fg="#555555")
     lbl_disp_frec_ruido.pack(expand=True)
 
-    # --- CUADRANTE 3: Espectro FFT 2D If(u,v) ---
+                                                  
     c3 = tk.Frame(panel_der_frec, bg="#202020", padx=6, pady=4, bd=1, relief=tk.SOLID)
     c3.grid(row=1, column=0, padx=4, pady=4, sticky="nsew")
     tk.Label(c3, text="3. Espectro FFT 2D If(u,v)", bg="#202020", fg="#4ec9b0", font=("Arial", 10, "bold")).pack()
@@ -1411,7 +1485,7 @@ def crear_interfaz():
     canvas_disp_frec_fft.bind("<Motion>", on_hover_espectro_fft)
     canvas_disp_frec_fft.bind("<Leave>", on_leave_espectro_fft)
 
-    # --- CUADRANTE 4: Imagen Filtrada (IFFT) / Con Acentuado [-1, 8] ---
+                                                                         
     c4 = tk.Frame(panel_der_frec, bg="#202020", padx=6, pady=4, bd=1, relief=tk.SOLID)
     c4.grid(row=1, column=1, padx=4, pady=4, sticky="nsew")
     lbl_tit_frec_filtrada = tk.Label(c4, text="4. Imagen Filtrada en Frecuencia (IFFT)", bg="#202020", fg="#9cdcfe", font=("Arial", 10, "bold"))
